@@ -182,6 +182,10 @@ pub struct Config {
     #[serde(default)]
     pub skills: SkillsConfig,
 
+    /// Pipeline tool configuration (`[pipeline]`).
+    #[serde(default)]
+    pub pipeline: PipelineConfig,
+
     /// Model routing rules — route `hint:<name>` to specific provider+model combos.
     #[serde(default)]
     pub model_routes: Vec<ModelRouteConfig>,
@@ -1517,6 +1521,9 @@ pub struct SkillsConfig {
     /// Autonomous skill creation from successful multi-step task executions.
     #[serde(default)]
     pub skill_creation: SkillCreationConfig,
+    /// Automatic skill self-improvement after successful skill usage.
+    #[serde(default)]
+    pub skill_improvement: SkillImprovementConfig,
 }
 
 /// Autonomous skill creation configuration (`[skills.skill_creation]` section).
@@ -1540,6 +1547,63 @@ impl Default for SkillCreationConfig {
             enabled: false,
             max_skills: 500,
             similarity_threshold: 0.85,
+        }
+    }
+}
+
+/// Skill self-improvement configuration (`[skills.auto_improve]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SkillImprovementConfig {
+    /// Enable automatic skill improvement after successful skill usage.
+    /// Default: `true`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Minimum interval (in seconds) between improvements for the same skill.
+    /// Default: `3600` (1 hour).
+    #[serde(default = "default_skill_improvement_cooldown")]
+    pub cooldown_secs: u64,
+}
+
+fn default_skill_improvement_cooldown() -> u64 {
+    3600
+}
+
+impl Default for SkillImprovementConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cooldown_secs: 3600,
+        }
+    }
+}
+
+/// Pipeline tool configuration (`[pipeline]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PipelineConfig {
+    /// Enable the `execute_pipeline` meta-tool.
+    /// Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of steps allowed in a single pipeline invocation.
+    /// Default: `20`.
+    #[serde(default = "default_pipeline_max_steps")]
+    pub max_steps: usize,
+    /// Tools allowed in pipeline steps. Steps referencing tools not on this
+    /// list are rejected before execution.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+}
+
+fn default_pipeline_max_steps() -> usize {
+    20
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_steps: 20,
+            allowed_tools: Vec::new(),
         }
     }
 }
@@ -6284,10 +6348,21 @@ pub enum StreamMode {
     Off,
     /// Update a draft message with every flush interval.
     Partial,
+    /// Send the response as multiple separate messages at paragraph boundaries.
+    #[serde(rename = "multi_message")]
+    MultiMessage,
 }
 
 fn default_draft_update_interval_ms() -> u64 {
     1000
+}
+
+fn default_multi_message_delay_ms() -> u64 {
+    800
+}
+
+fn default_matrix_draft_update_interval_ms() -> u64 {
+    1500
 }
 
 /// Telegram bot channel configuration.
@@ -6573,6 +6648,17 @@ pub struct MatrixConfig {
     /// Whether to interrupt an in-flight agent response when a new message arrives.
     #[serde(default)]
     pub interrupt_on_new_message: bool,
+    /// Streaming mode for progressive response delivery.
+    /// `"off"` (default): single message. `"partial"`: edit-in-place draft.
+    /// `"multi_message"`: paragraph-split delivery.
+    #[serde(default)]
+    pub stream_mode: StreamMode,
+    /// Minimum interval (ms) between draft message edits in Partial mode.
+    #[serde(default = "default_matrix_draft_update_interval_ms")]
+    pub draft_update_interval_ms: u64,
+    /// Delay (ms) between sending each paragraph in MultiMessage mode.
+    #[serde(default = "default_multi_message_delay_ms")]
+    pub multi_message_delay_ms: u64,
 }
 
 impl ChannelConfig for MatrixConfig {
@@ -8124,6 +8210,7 @@ impl Default for Config {
             agent: AgentConfig::default(),
             pacing: PacingConfig::default(),
             skills: SkillsConfig::default(),
+            pipeline: PipelineConfig::default(),
             model_routes: Vec::new(),
             embedding_routes: Vec::new(),
             heartbeat: HeartbeatConfig::default(),
@@ -10010,6 +10097,11 @@ impl Config {
             self.gateway.allow_public_bind = val == "1" || val.eq_ignore_ascii_case("true");
         }
 
+        // Require pairing: ZEROCLAW_REQUIRE_PAIRING
+        if let Ok(val) = std::env::var("ZEROCLAW_REQUIRE_PAIRING") {
+            self.gateway.require_pairing = val == "1" || val.eq_ignore_ascii_case("true");
+        }
+
         // Temperature: ZEROCLAW_TEMPERATURE
         if let Ok(temp_str) = std::env::var("ZEROCLAW_TEMPERATURE") {
             match temp_str.parse::<f64>() {
@@ -11225,6 +11317,7 @@ auto_save = true
             reliability: ReliabilityConfig::default(),
             scheduler: SchedulerConfig::default(),
             skills: SkillsConfig::default(),
+            pipeline: PipelineConfig::default(),
             model_routes: Vec::new(),
             embedding_routes: Vec::new(),
             query_classification: QueryClassificationConfig::default(),
@@ -11806,6 +11899,7 @@ default_temperature = 0.7
             reliability: ReliabilityConfig::default(),
             scheduler: SchedulerConfig::default(),
             skills: SkillsConfig::default(),
+            pipeline: PipelineConfig::default(),
             model_routes: Vec::new(),
             embedding_routes: Vec::new(),
             query_classification: QueryClassificationConfig::default(),
@@ -12146,6 +12240,9 @@ default_temperature = 0.7
             allowed_users: vec!["@user:matrix.org".into()],
             allowed_rooms: vec![],
             interrupt_on_new_message: false,
+            stream_mode: StreamMode::default(),
+            draft_update_interval_ms: 1500,
+            multi_message_delay_ms: 800,
         };
         let json = serde_json::to_string(&mc).unwrap();
         let parsed: MatrixConfig = serde_json::from_str(&json).unwrap();
@@ -12168,6 +12265,9 @@ default_temperature = 0.7
             allowed_users: vec!["@admin:synapse.local".into(), "*".into()],
             allowed_rooms: vec![],
             interrupt_on_new_message: false,
+            stream_mode: StreamMode::default(),
+            draft_update_interval_ms: 1500,
+            multi_message_delay_ms: 800,
         };
         let toml_str = toml::to_string(&mc).unwrap();
         let parsed: MatrixConfig = toml::from_str(&toml_str).unwrap();
@@ -12262,6 +12362,9 @@ allowed_users = ["@ops:matrix.org"]
                 allowed_users: vec!["@u:m".into()],
                 allowed_rooms: vec![],
                 interrupt_on_new_message: false,
+                stream_mode: StreamMode::default(),
+                draft_update_interval_ms: 1500,
+                multi_message_delay_ms: 800,
             }),
             signal: None,
             whatsapp: None,
@@ -13876,6 +13979,23 @@ default_model = "persisted-profile"
         assert_eq!(config.gateway.host, "0.0.0.0");
 
         std::env::remove_var("HOST");
+    }
+
+    #[test]
+    async fn env_override_require_pairing() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+        assert!(config.gateway.require_pairing);
+
+        std::env::set_var("ZEROCLAW_REQUIRE_PAIRING", "false");
+        config.apply_env_overrides();
+        assert!(!config.gateway.require_pairing);
+
+        std::env::set_var("ZEROCLAW_REQUIRE_PAIRING", "true");
+        config.apply_env_overrides();
+        assert!(config.gateway.require_pairing);
+
+        std::env::remove_var("ZEROCLAW_REQUIRE_PAIRING");
     }
 
     #[test]
