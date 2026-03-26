@@ -1,7 +1,19 @@
-//! A2A (Agent-to-Agent) protocol server handlers.
+//! # A2A Protocol — MVP Implementation
 //!
-//! Serves the agent card at `GET /.well-known/agent-card.json` and processes
-//! inbound JSON-RPC 2.0 task requests at `POST /a2a`.
+//! Implements a minimal subset of the A2A (Agent-to-Agent) protocol:
+//! - Agent Card discovery (`GET /.well-known/agent-card.json`)
+//! - `message/send` (synchronous request/response, no async queue)
+//! - `tasks/get` (polling only)
+//! - Bearer token authentication
+//!
+//! **Not yet implemented (see issue #3566):**
+//! - `message/stream` (SSE)
+//! - `tasks/cancel`
+//! - `input-required` state / multi-turn conversations (`contextId`)
+//! - Push notifications
+//! - Structured/binary message parts (`data`, `raw`)
+//! - Async task execution
+//! - Task persistence
 
 use super::AppState;
 use crate::security::pairing::constant_time_eq;
