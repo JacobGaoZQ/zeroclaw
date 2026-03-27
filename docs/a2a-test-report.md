@@ -100,6 +100,50 @@ enabled = false
 
 ---
 
+### Strands-Qwen Agent（Python，端口 9000）
+
+这是一个基于 **Strands Agents SDK** 的第三方 A2A 实现，用于验证 ZeroClaw 与 Python 框架的跨框架互通。
+
+**依赖安装：**
+
+```bash
+cd python
+pip install -r requirements-strands.txt
+```
+
+**启动脚本：** `python/strands_a2a_server.py`
+
+```python
+# 核心配置（已内嵌在脚本中）
+- host: "0.0.0.0"
+- port: 9000
+- model: Qwen (OpenAI 兼容接口)
+- tools: http_request, shell, file_read, file_write
+```
+
+**启动命令：**
+
+```bash
+export QWEN_API_KEY=<your-key>
+python python/strands_a2a_server.py
+```
+
+**Strands Agent 与 ZeroClaw Agent 的关键差异：**
+
+| 特性 | Strands Agent | ZeroClaw Agent |
+|---|---|---|
+| 实现语言 | Python | Rust |
+| SDK | Strands Agents | ZeroClaw 原生 |
+| LLM 后端 | Qwen via OpenAI 兼容接口 | Qwen 原生 |
+| 默认端口 | `9000` | `42617` |
+| 认证 | 默认无 bearer token | `a2a-shared-secret` |
+| 流式支持 | `streaming: true` | 未实现（MVP） |
+| 工具注册 | `strands_tools` 自动暴露 | 需手动配置 |
+
+Strands A2A 实例默认无 bearer token 认证，ZeroClaw 调用时留空 Bearer Token 即可。
+
+---
+
 ## 三、关于配置目录的选择
 
 ### 测试环境（本文使用）
@@ -154,7 +198,9 @@ echo $CODESPACE_NAME
 https://<CODESPACE_NAME>-<PORT>.app.github.dev
 ```
 
-### 2. 启动两个实例
+### 2. 启动三个实例
+
+**ZeroClaw Agent-A / Agent-B：**
 
 使用 `--config-dir` 指定配置目录（不能用环境变量，必须用此参数）：
 
@@ -173,13 +219,26 @@ cat /tmp/agent-a.log
 cat /tmp/agent-b.log
 ```
 
+**Strands Agent（Python，端口 9000）：**
+
+```bash
+export QWEN_API_KEY=<your-key>
+python python/strands_a2a_server.py > /tmp/strands-a2a.log 2>&1 &
+```
+
+确认启动成功（日志中应出现 `Uvicorn running on http://0.0.0.0:9000`）：
+
+```bash
+cat /tmp/strands-a2a.log
+```
+
 ### 3. 开放 Codespaces 端口可见性
 
 Codespaces 端口默认为 **Private**，浏览器跨端口请求会被拦截，导致 UI 中的 Remote Agent 测试失败。
 
 操作步骤：
 1. 打开 VS Code 底部 **Ports** 面板（或 GitHub Codespaces 网页的 Ports 标签）
-2. 找到端口 `8080` 和 `8081`
+2. 找到端口 `8080`、`8081` 和 `9000`
 3. 右键 → **Port Visibility** → 改为 **Public**（或 Organization）
 
 ### 4. 验证端点可用性
@@ -190,13 +249,16 @@ curl http://localhost:8080/.well-known/agent-card.json
 
 # 验证 Agent-B
 curl http://localhost:8081/.well-known/agent-card.json
+
+# 验证 Strands Agent
+curl http://localhost:9000/.well-known/agent-card.json
 ```
 
-两者均应返回包含各自 `agent_name` 和 Codespaces `public_url` 的 JSON。
+三者均应返回包含各自 `agent_name` 和 Codespaces `public_url` 的 JSON。Strands Agent 的响应中 `capabilities.streaming` 为 `true`，与 ZeroClaw 的 `false` 不同，体现跨框架差异。
 
 ---
 
-## 五、在 Agent-A UI 中测试与 Agent-B 的通信
+## 五、在 Agent-A UI 中测试 A2A 通信
 
 打开 Agent-A 的 Web Dashboard：
 
@@ -206,7 +268,7 @@ https://<CODESPACE_NAME>-8080.app.github.dev
 
 进入左侧菜单 **A2A Test** 页面。
 
-### 参数配置
+### 5.1 测试与 Agent-B（ZeroClaw）的通信
 
 点击 **Remote Agent** 切换到远端模式，填写：
 
@@ -215,7 +277,7 @@ https://<CODESPACE_NAME>-8080.app.github.dev
 | Agent URL | `https://<CODESPACE_NAME>-8081.app.github.dev` |
 | Bearer Token | `a2a-shared-secret` |
 
-### 测试步骤
+#### 测试步骤
 
 **Step 1 — 发现（discover）**
 
@@ -240,6 +302,26 @@ https://<CODESPACE_NAME>-8080.app.github.dev
 选择 `result`，点击 Run。
 
 获取 Agent-B 返回的 artifacts（完整响应内容）。
+
+---
+
+### 5.2 测试与 Strands Agent（Python）的跨框架通信
+
+点击 **Remote Agent** 切换到远端模式，填写：
+
+| 字段 | 填写值 |
+|---|---|
+| Agent URL | `https://<CODESPACE_NAME>-9000.app.github.dev` |
+| Bearer Token | （留空，Strands 默认无认证） |
+
+#### 测试步骤
+
+与 5.1 相同，执行 discover → send → status → result。
+
+**预期差异：**
+- Strands Agent 的 agent card 中 `capabilities.streaming: true`（ZeroClaw 为 `false`）
+- Strands Agent 的 `skills` 列表包含 `http_request`、`shell`、`file_read`、`file_write` 等工具描述
+- 由于 Strands 和 ZeroClaw 的 LLM 后端相同（均为 Qwen），响应质量应相当
 
 ---
 
