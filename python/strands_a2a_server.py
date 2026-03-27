@@ -1,8 +1,14 @@
 """
-Strands Agents A2A Server
-=========================
+Strands Agents A2A Server (with CORS support)
+=============================================
 A Python A2A-compatible agent powered by Strands Agents SDK and Qwen LLM.
 Runs on port 9000 and can communicate with ZeroClaw agents via the A2A protocol.
+
+Features:
+- CORS enabled for cross-origin requests from ZeroClaw UI
+- /a2a endpoint for ZeroClaw compatibility (Strands uses / by default)
+- Qwen LLM via OpenAI-compatible API
+- Tools: http_request, shell, file_read, file_write
 
 Usage:
     export QWEN_API_KEY=<your-key>
@@ -16,7 +22,14 @@ Optional:
 import logging
 import os
 
+import httpx
+import uvicorn
 from openai import AsyncOpenAI
+from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Mount, Route
 from strands import Agent
 from strands.models.openai import OpenAIModel
 from strands.multiagent.a2a import A2AServer
@@ -76,13 +89,69 @@ agent = Agent(
     ),
 )
 
-# ── A2A Server ────────────────────────────────────────────────────
+# ── A2A Server with CORS and /a2a route ───────────────────────────
 
-server = A2AServer(
+# Create Strands A2A server instance
+a2a_server = A2AServer(
     agent=agent,
     host=HOST,
     port=PORT,
     http_url=PUBLIC_URL,
+)
+
+# Build Starlette app from A2A server (this has routes on /)
+a2a_app = a2a_server.to_starlette_app()
+
+
+# Proxy handler for /a2a -> /
+async def a2a_proxy(request: Request) -> Response:
+    """Proxy /a2a requests to / for ZeroClaw compatibility."""
+    body = await request.body()
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"http://localhost:{PORT}/",
+                content=body,
+                headers={
+                    "Content-Type": request.headers.get("Content-Type", "application/json"),
+                    "Authorization": request.headers.get("Authorization", ""),
+                },
+                timeout=60.0,
+            )
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+        except Exception as e:
+            logger.error("Proxy error: %s", e)
+            return Response(
+                content=f'{{"jsonrpc":"2.0","error":{{"code":-32000,"message":"Proxy error: {e}"}}}}'.encode(),
+                status_code=500,
+                media_type="application/json",
+            )
+
+
+# Create parent app with explicit routes
+# Order matters: /a2a must be before the catch-all mount
+routes = [
+    Route("/a2a", a2a_proxy, methods=["POST"]),
+    Mount("/", app=a2a_app),
+]
+
+app = Starlette(routes=routes)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ── Entrypoint ────────────────────────────────────────────────────
@@ -90,4 +159,6 @@ server = A2AServer(
 if __name__ == "__main__":
     logger.info("Starting Strands A2A server on %s:%d", HOST, PORT)
     logger.info("Agent card: %s/.well-known/agent-card.json", PUBLIC_URL)
-    server.serve()
+    logger.info("CORS enabled for cross-origin requests")
+    logger.info("ZeroClaw compatible endpoint: %s/a2a", PUBLIC_URL)
+    uvicorn.run(app, host=HOST, port=PORT)
