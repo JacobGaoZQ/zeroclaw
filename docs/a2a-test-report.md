@@ -8,7 +8,13 @@
 
 ## 一、目标
 
-在 GitHub Codespaces 环境中启动两个独立的 ZeroClaw 实例（Agent-A、Agent-B），通过 A2A 协议实现跨 Agent 通信，并在 Agent-A 的 Web UI 页面中完成端对端测试。
+在 GitHub Codespaces 环境中构建多 Agent A2A 通信测试场景，验证以下能力：
+
+1. **同框架互通**：两个 ZeroClaw 实例（Agent-A、Agent-B）通过 A2A 协议互相发现并通信
+2. **跨框架互通**：ZeroClaw 实例与第三方 Strands Agents（Python）实例互通，验证 A2A 协议的实现无关性
+3. **端到端测试**：在 Agent-A 的 Web UI 中完成对所有远端 Agent 的发现、消息发送、状态查询和结果获取
+
+通过本测试，确认 A2A 协议能够作为异构 Agent 系统之间的通用通信标准，为构建多 Agent 协作网络提供基础。
 
 ---
 
