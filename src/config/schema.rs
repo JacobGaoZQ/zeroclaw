@@ -3778,6 +3778,10 @@ pub struct A2aConfig {
     /// When set, inbound A2A task results are also posted to this chat.
     #[serde(default)]
     pub notify_chat_id: Option<i64>,
+    /// Allow outbound A2A requests to localhost/private IPs.
+    /// Enable only in development for same-host multi-agent testing.
+    #[serde(default)]
+    pub allow_local: bool,
 }
 
 impl std::fmt::Debug for A2aConfig {

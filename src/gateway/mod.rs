@@ -51,6 +51,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
@@ -1058,7 +1059,13 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(gateway_request_timeout_secs()),
-        ));
+        ))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        );
 
     // Nest under path prefix when configured (axum strips prefix before routing).
     // nest() at "/prefix" handles both "/prefix" and "/prefix/*" but not "/prefix/"
