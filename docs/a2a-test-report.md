@@ -113,12 +113,128 @@ pip install -r requirements-strands.txt
 
 **启动脚本：** `python/strands_a2a_server.py`
 
+完整脚本内容：
+
 ```python
-# 核心配置（已内嵌在脚本中）
-- host: "0.0.0.0"
-- port: 9000
-- model: Qwen (OpenAI 兼容接口)
-- tools: http_request, shell, file_read, file_write
+"""
+Strands Agents A2A Server (with CORS support)
+=============================================
+A Python A2A-compatible agent powered by Strands Agents SDK and Qwen LLM.
+Runs on port 9000 and can communicate with ZeroClaw agents via the A2A protocol.
+
+Features:
+- CORS enabled for cross-origin requests from ZeroClaw UI
+- /a2a endpoint for ZeroClaw compatibility (Strands uses / by default)
+- Qwen LLM via OpenAI-compatible API
+- Tools: http_request, shell, file_read, file_write
+"""
+
+import logging
+import os
+
+import httpx
+import uvicorn
+from openai import AsyncOpenAI
+from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Mount, Route
+from strands import Agent
+from strands.models.openai import OpenAIModel
+from strands.multiagent.a2a import A2AServer
+from strands_tools import file_read, file_write, http_request, shell
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── Configuration ─────────────────────────────────────────────────
+
+API_KEY = os.environ.get("QWEN_API_KEY") or os.environ.get("API_KEY")
+if not API_KEY:
+    raise RuntimeError("QWEN_API_KEY environment variable is required")
+
+PORT = int(os.environ.get("PORT", "9000"))
+HOST = "0.0.0.0"
+
+# Derive public URL for agent card (auto-detect in Codespaces)
+CODESPACE_NAME = os.environ.get("CODESPACE_NAME", "")
+if CODESPACE_NAME:
+    PUBLIC_URL = f"https://{CODESPACE_NAME}-{PORT}.app.github.dev"
+else:
+    PUBLIC_URL = f"http://localhost:{PORT}"
+
+# ── LLM Model ────────────────────────────────────────────────────
+
+qwen_client = AsyncOpenAI(
+    api_key=API_KEY,
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+)
+
+model = OpenAIModel(client=qwen_client, model_id="qwen-plus")
+
+# ── Agent ─────────────────────────────────────────────────────────
+
+agent = Agent(
+    model=model,
+    name="Strands-Qwen Agent",
+    description="A Strands Agents A2A node for cross-framework interop testing with ZeroClaw.",
+    tools=[http_request, shell, file_read, file_write],
+    system_prompt=(
+        "You are a helpful AI assistant powered by Qwen via Strands Agents. "
+        "You can execute shell commands, read/write files, and make HTTP requests."
+    ),
+)
+
+# ── A2A Server with CORS and /a2a route ───────────────────────────
+
+a2a_server = A2AServer(agent=agent, host=HOST, port=PORT, http_url=PUBLIC_URL)
+a2a_app = a2a_server.to_starlette_app()
+
+
+# Proxy /a2a -> / for ZeroClaw compatibility
+async def a2a_proxy(request: Request) -> Response:
+    body = await request.body()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"http://localhost:{PORT}/",
+            content=body,
+            headers={
+                "Content-Type": request.headers.get("Content-Type", "application/json"),
+            },
+            timeout=60.0,
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+        )
+
+
+# Routes: /a2a must be before /*
+routes = [
+    Route("/a2a", a2a_proxy, methods=["POST"]),
+    Mount("/", app=a2a_app),
+]
+
+app = Starlette(routes=routes)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Entrypoint ────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    logger.info("Starting Strands A2A server on %s:%d", HOST, PORT)
+    logger.info("Agent card: %s/.well-known/agent-card.json", PUBLIC_URL)
+    uvicorn.run(app, host=HOST, port=PORT)
 ```
 
 **启动命令：**
