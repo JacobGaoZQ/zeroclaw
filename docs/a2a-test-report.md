@@ -341,29 +341,57 @@ https://<CODESPACE_NAME>-8080.app.github.dev
 
 ## 六、实际运行截图
 
-以下截图来自 Agent-A 的 Web Dashboard A2A Tester 页面，展示完整测试流程。
+以下截图来自 Agent-A 的 Web Dashboard A2A Tester 页面，展示与不同 Agent 的通信结果。
+
+### 6.1 与 ZeroClaw Agent-B 通信
 
 **截图 1 — Discover：拉取 Agent-B 的 Agent Card**
 
-![Discover 操作结果](assets/a2a-discover.png)
+![ZeroClaw Discover](assets/a2a-zeroclaw-discover.png)
 
-目标设置为 Remote Agent，填入 Agent-B 的 Codespaces 公网地址后执行 Discover。右侧结果面板返回 Agent-B 的 agent card，包含 `name: "Agent-B"`、`description`、`skills` 等字段，同时展示了 Status 查询的 `completed` 状态，确认通信链路正常。
+目标设置为 Remote Agent，填入 Agent-B 的 Codespaces 公网地址后执行 Discover。右侧结果面板返回 Agent-B 的 agent card，包含 `name: "Agent-B"`、`description`、`skills` 等字段，确认通信链路正常。
 
 ---
 
 **截图 2 — Send：向 Agent-B 发送消息**
 
-![Send 操作结果](assets/a2a-send.png)
+![ZeroClaw Send](assets/a2a-zeroclaw-send.png)
 
-在 Message 框输入"你好，你能做什么"，执行 Send。Agent-B 的 LLM 自主处理后返回完整回复，结果卡片中包含 `task_id` 和 `status: completed`，点击 Use Task ID 可将 task_id 自动填入后续查询。
+在 Message 框输入"你好，你能做什么"，执行 Send。Agent-B 的 LLM 处理后返回完整回复，结果卡片中包含 `task_id` 和 `status: completed`。
 
 ---
 
 **截图 3 — Status：通过 task_id 查询任务状态**
 
-![Status 操作结果](assets/a2a-status.png)
+![ZeroClaw Status](assets/a2a-zeroclaw-status.png)
 
-将上一步返回的 task_id（`a08f9315-a1db-4762-9ca8-c9e8fc16928d`）填入 Task ID 框，执行 Status。Agent-B 返回该任务的完整状态，`state: completed`，artifacts 中包含实际响应内容。
+将上一步返回的 task_id 填入 Task ID 框，执行 Status。Agent-B 返回该任务的完整状态，`state: completed`。
+
+---
+
+### 6.2 与 Strands Agent（跨框架）通信
+
+**截图 4 — Discover：拉取 Strands Agent 的 Agent Card**
+
+![Strands Discover](assets/a2a-strands-discover.png)
+
+填入 Strands Agent 地址（端口 9000），执行 Discover。注意响应中 `capabilities.streaming: true`，与 ZeroClaw 的 `false` 不同，体现跨框架差异。
+
+---
+
+**截图 5 — Send：向 Strands Agent 发送消息**
+
+![Strands Send](assets/a2a-strands-send.png)
+
+发送"你好，你能干什么"，Strands Agent 返回 task_id。与 ZeroClaw 相比，Strands 的响应包含更详细的 `history` 字段，记录了完整的对话上下文。
+
+---
+
+**截图 6 — Status：查询 Strands Agent 任务状态**
+
+![Strands Status](assets/a2a-strands-status.png)
+
+执行 Status 查询，Strands 返回 `state: completed` 和完整的 artifacts。跨框架通信验证成功，A2A 协议实现无关性得到确认。
 
 ---
 
