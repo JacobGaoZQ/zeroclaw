@@ -51,6 +51,13 @@ enabled = false
 | `a2a.public_url` | Codespaces 公网域名 | Agent Card 中对外声明的服务地址，必须是外部可达的 URL |
 | `a2a.bearer_token` | `a2a-shared-secret` | A2A 请求认证 Token，两端保持一致 |
 | `a2a.allow_local` | `true` | 允许出站 A2A 工具访问本地地址（开发环境用） |
+| `cost.enabled` | `false` | 关闭费用追踪，防止预算上限拦截测试请求（见附注） |
+
+> **`cost.enabled` 说明**
+>
+> `[cost]` 是 ZeroClaw 的费用追踪与预算管控模块，**默认开启**。开启时会统计每次 LLM 调用的 token 消耗和估算费用，并在达到预算阈值（默认日限 $10、月限 $100）时触发告警或拦截。
+>
+> 测试配置中将其关闭，是为了避免在 A2A 通信验证过程中因触发预算上限导致请求被意外拦截。**正式部署时建议去掉此行（保持默认开启），或根据实际需求配置 `daily_limit_usd` / `monthly_limit_usd`。**
 
 ---
 
@@ -93,7 +100,38 @@ enabled = false
 
 ---
 
-## 三、Codespaces 启动步骤
+## 三、关于配置目录的选择
+
+### 测试环境（本文使用）
+
+本文使用 `/tmp/zeroclaw-a` 和 `/tmp/zeroclaw-b` 作为配置目录，原因是 `/tmp` 创建快速，无需关心清理，适合一次性测试。
+
+**注意：`/tmp` 是临时目录，系统重启后会被清空**，其中的会话数据、workspace 等均不会保留，仅适用于临时测试。
+
+### 正式部署
+
+ZeroClaw 的默认配置目录是 `~/.zeroclaw/`，不加 `--config-dir` 参数时进程自动读取 `~/.zeroclaw/config.toml`。
+
+多实例正式部署的推荐做法是使用具名的持久化目录：
+
+```bash
+# 目录结构示例
+~/.zeroclaw-agent-a/config.toml
+~/.zeroclaw-agent-b/config.toml
+```
+
+启动：
+
+```bash
+zeroclaw --config-dir ~/.zeroclaw-agent-a gateway start
+zeroclaw --config-dir ~/.zeroclaw-agent-b gateway start
+```
+
+数据、workspace、SQLite 会话等均持久化在各自目录下，重启后不丢失。若只部署单实例，直接使用默认目录 `~/.zeroclaw/` 即可，无需任何额外参数。
+
+---
+
+## 四、Codespaces 启动步骤
 
 ### 1. 准备独立配置目录
 
@@ -158,7 +196,7 @@ curl http://localhost:8081/.well-known/agent-card.json
 
 ---
 
-## 四、在 Agent-A UI 中测试与 Agent-B 的通信
+## 五、在 Agent-A UI 中测试与 Agent-B 的通信
 
 打开 Agent-A 的 Web Dashboard：
 
@@ -205,7 +243,35 @@ https://<CODESPACE_NAME>-8080.app.github.dev
 
 ---
 
-## 五、常见问题
+## 六、实际运行截图
+
+以下截图来自 Agent-A 的 Web Dashboard A2A Tester 页面，展示完整测试流程。
+
+**截图 1 — Discover：拉取 Agent-B 的 Agent Card**
+
+![Discover 操作结果](assets/a2a-discover.png)
+
+目标设置为 Remote Agent，填入 Agent-B 的 Codespaces 公网地址后执行 Discover。右侧结果面板返回 Agent-B 的 agent card，包含 `name: "Agent-B"`、`description`、`skills` 等字段，同时展示了 Status 查询的 `completed` 状态，确认通信链路正常。
+
+---
+
+**截图 2 — Send：向 Agent-B 发送消息**
+
+![Send 操作结果](assets/a2a-send.png)
+
+在 Message 框输入"你好，你能做什么"，执行 Send。Agent-B 的 LLM 自主处理后返回完整回复，结果卡片中包含 `task_id` 和 `status: completed`，点击 Use Task ID 可将 task_id 自动填入后续查询。
+
+---
+
+**截图 3 — Status：通过 task_id 查询任务状态**
+
+![Status 操作结果](assets/a2a-status.png)
+
+将上一步返回的 task_id（`a08f9315-a1db-4762-9ca8-c9e8fc16928d`）填入 Task ID 框，执行 Status。Agent-B 返回该任务的完整状态，`state: completed`，artifacts 中包含实际响应内容。
+
+---
+
+## 七、常见问题
 
 **启动时报 `Address already in use`**
 
@@ -213,7 +279,7 @@ https://<CODESPACE_NAME>-8080.app.github.dev
 
 **`discover` 在 UI 中报网络错误**
 
-Codespaces 端口可见性为 Private，需按第三节第 3 步将 8080、8081 改为 Public。
+Codespaces 端口可见性为 Private，需按第四节第 3 步将 8080、8081 改为 Public。
 
 **`send` 返回 HTTP 401**
 
