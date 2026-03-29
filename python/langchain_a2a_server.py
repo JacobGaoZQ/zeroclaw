@@ -14,20 +14,16 @@ import json
 import logging
 import os
 import subprocess
-import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import httpx
-import uvicorn
 from langchain_core.tools import Tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from starlette.applications import Starlette
-from starlette.middleware.cors import CORSMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+
+from python_a2a import A2AServer, run_server, AgentCard
+from python_a2a.models.agent import AgentSkill
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,15 +50,6 @@ else:
     PUBLIC_URL = f"http://localhost:{PORT}"
 
 logger.info("Public URL: %s", PUBLIC_URL)
-
-# ── LangChain LLM ────────────────────────────────────────────────
-
-llm = ChatOpenAI(
-    api_key=API_KEY,
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model="qwen-plus",
-    temperature=0.7,
-)
 
 # ── Tools ─────────────────────────────────────────────────────────
 
@@ -126,7 +113,15 @@ def file_write_tool(path: str, content: str) -> str:
         return f"File write failed: {str(e)}"
 
 
-# Create LangChain tools
+# ── LangChain Agent ───────────────────────────────────────────────
+
+llm = ChatOpenAI(
+    api_key=API_KEY,
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model="qwen-plus",
+    temperature=0.7,
+)
+
 langchain_tools = [
     Tool(
         name="http_request",
@@ -153,94 +148,53 @@ langchain_tools = [
 # Bind tools to LLM
 llm_with_tools = llm.bind_tools(langchain_tools)
 
-# ── Agent Card ────────────────────────────────────────────────────
 
-AGENT_CARD = {
-    "name": "LangChain-Qwen Agent",
-    "description": "A LangChain A2A node powered by Qwen and python-a2a, for cross-framework A2A interop testing with ZeroClaw.",
-    "url": PUBLIC_URL,
-    "version": "1.0.0",
-    "protocol_version": "0.3.0",
-    "preferred_transport": "JSONRPC",
-    "authentication": None,
-    "capabilities": {
-        "streaming": False,
-        "pushNotifications": False,
-        "google_a2a_compatible": True,
-        "parts_array_format": True
-    },
-    "default_input_modes": ["text/plain"],
-    "default_output_modes": ["text/plain"],
-    "skills": [
-        {
-            "id": "http_request",
-            "name": "HTTP Request",
-            "description": "Make HTTP requests to external APIs",
-            "tags": [],
-            "examples": [],
-            "input_modes": ["text/plain"],
-            "output_modes": ["text/plain"]
-        },
-        {
-            "id": "shell",
-            "name": "Shell Command",
-            "description": "Execute shell commands",
-            "tags": [],
-            "examples": [],
-            "input_modes": ["text/plain"],
-            "output_modes": ["text/plain"]
-        },
-        {
-            "id": "file_read",
-            "name": "File Read",
-            "description": "Read files from /tmp/ directory",
-            "tags": [],
-            "examples": [],
-            "input_modes": ["text/plain"],
-            "output_modes": ["text/plain"]
-        },
-        {
-            "id": "file_write",
-            "name": "File Write",
-            "description": "Write files to /tmp/ directory",
-            "tags": [],
-            "examples": [],
-            "input_modes": ["text/plain"],
-            "output_modes": ["text/plain"]
-        }
-    ],
-    "provider": None,
-    "documentation_url": None
-}
+# ── A2A Server ────────────────────────────────────────────────────
 
-# ── Task Storage ──────────────────────────────────────────────────
+class LangChainA2AServer(A2AServer):
+    """LangChain A2A Server implementation using python-a2a."""
 
-tasks: Dict[str, Dict] = {}
+    def __init__(self):
+        # Create agent card
+        agent_card = AgentCard(
+            name="LangChain-Qwen Agent",
+            description="A LangChain A2A node powered by Qwen and python-a2a, for cross-framework A2A interop testing with ZeroClaw.",
+            url=PUBLIC_URL,
+            version="1.0.0",
+            capabilities={
+                "streaming": False,
+                "pushNotifications": False,
+            },
+            skills=[
+                AgentSkill(
+                    id="http_request",
+                    name="HTTP Request",
+                    description="Make HTTP requests to external APIs",
+                ),
+                AgentSkill(
+                    id="shell",
+                    name="Shell Command",
+                    description="Execute shell commands",
+                ),
+                AgentSkill(
+                    id="file_read",
+                    name="File Read",
+                    description="Read files from /tmp/ directory",
+                ),
+                AgentSkill(
+                    id="file_write",
+                    name="File Write",
+                    description="Write files to /tmp/ directory",
+                ),
+            ],
+        )
+        super().__init__(agent_card=agent_card)
+        self.tasks: Dict[str, Dict] = {}
 
-# ── HTTP Handlers ─────────────────────────────────────────────────
-
-async def agent_card_handler(request: Request) -> JSONResponse:
-    """Handle GET /.well-known/agent-card.json"""
-    return JSONResponse(AGENT_CARD)
-
-
-def extract_text_from_message(message_data: Dict) -> str:
-    """Extract text from message parts."""
-    parts = message_data.get("parts", [])
-    texts = []
-    for part in parts:
-        if isinstance(part, dict):
-            if part.get("type") == "text":
-                texts.append(part.get("text", ""))
-            elif "text" in part:
-                texts.append(part["text"])
-    return " ".join(texts) if texts else ""
-
-
-async def process_message(user_input: str) -> str:
-    """Process user message with LangChain."""
-    messages = [
-        SystemMessage(content="""You are a helpful AI assistant powered by Qwen via the LangChain framework.
+    async def process_message(self, user_input: str) -> str:
+        """Process user message with LangChain."""
+        messages = [
+            SystemMessage(content="""You are a helpful AI assistant powered by Qwen via the LangChain framework.
 You can execute shell commands, read/write files, and make HTTP requests.
 You communicate with other agents using the A2A protocol.
 
@@ -251,125 +205,59 @@ Available tools:
 - file_write: Write files to /tmp/ directory
 
 Respond naturally to the user's request."""),
-        HumanMessage(content=user_input),
-    ]
+            HumanMessage(content=user_input),
+        ]
 
-    response = await llm_with_tools.ainvoke(messages)
-    return response.content
+        response = await llm_with_tools.ainvoke(messages)
+        return response.content
 
+    def handle_task(self, task):
+        """Handle A2A task."""
+        from python_a2a.models import TaskStatus, TaskState, Message, TextContent
 
-async def a2a_handler(request: Request) -> Response:
-    """Handle POST /a2a - A2A JSON-RPC endpoint"""
-    try:
-        body = await request.json()
-        logger.info("A2A request: %s", body.get("method", "unknown"))
+        # Get input from task
+        user_input = ""
+        if hasattr(task, 'message') and task.message:
+            msg = task.message
+            if hasattr(msg, 'content') and msg.content:
+                content = msg.content
+                # Handle TextContent
+                if hasattr(content, 'text'):
+                    user_input = content.text
+                elif hasattr(content, 'content') and isinstance(content.content, str):
+                    user_input = content.content
+                else:
+                    user_input = str(content)
 
-        method = body.get("method", "")
-        params = body.get("params", {})
-        request_id = body.get("id", 1)
+        logger.info("Received input: %s", user_input[:100] if user_input else "(empty)")
 
-        if method == "message/send":
-            message_data = params.get("message", {})
-            user_input = extract_text_from_message(message_data)
+        if not user_input:
+            task.status = TaskStatus(state=TaskState.FAILED, message="No input provided")
+            return task
 
-            if not user_input:
-                return JSONResponse({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32602, "message": "Invalid params: no text content"},
-                })
+        # Process synchronously (python-a2a handles async internally)
+        import asyncio
+        try:
+            output = asyncio.run(self.process_message(user_input))
+            task.status = TaskStatus(state=TaskState.COMPLETED)
+            # Create response message
+            task.message = Message(
+                role="agent",
+                content=TextContent(text=output)
+            )
+        except Exception as e:
+            logger.error("Processing error: %s", e)
+            task.status = TaskStatus(state=TaskState.FAILED, message=str(e))
 
-            task_id = params.get("contextId") or str(uuid.uuid4())
+        return task
 
-            # Process the message
-            try:
-                output = await process_message(user_input)
-
-                # Store task result
-                tasks[task_id] = {
-                    "state": "completed",
-                    "output": output,
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "id": task_id,
-                        "task_id": task_id,
-                        "status": "completed",
-                        "message": {
-                            "role": "agent",
-                            "parts": [{"type": "text", "text": output}],
-                        },
-                    },
-                }
-                return JSONResponse(response)
-
-            except Exception as e:
-                logger.error("Processing error: %s", e)
-                return JSONResponse({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32000, "message": f"Processing error: {str(e)}"},
-                })
-
-        elif method == "tasks/get":
-            # Support both 'task_id' and 'id' parameter names
-            task_id = params.get("task_id") or params.get("id", "")
-            logger.info("tasks/get request - task_id: '%s', params: %s", task_id, params)
-            task = tasks.get(task_id, {"state": "unknown"})
-            logger.info("tasks/get response - found: %s, known tasks: %s", task_id in tasks, list(tasks.keys())[:5])
-
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "task_id": task_id,
-                    "state": task.get("state", "unknown"),
-                    "status": {"state": task.get("state", "unknown")},
-                },
-            }
-            return JSONResponse(response)
-
-        else:
-            return JSONResponse({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32601, "message": f"Method not found: {method}"},
-            })
-
-    except Exception as e:
-        logger.error("A2A handler error: %s", e)
-        return JSONResponse({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": {"code": -32000, "message": f"Internal error: {str(e)}"},
-        })
-
-
-# Create Starlette app
-routes = [
-    Route("/.well-known/agent-card.json", agent_card_handler, methods=["GET"]),
-    Route("/a2a", a2a_handler, methods=["POST"]),
-]
-
-app = Starlette(routes=routes)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ── Entrypoint ────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     logger.info("Starting LangChain A2A server on %s:%d", HOST, PORT)
     logger.info("Agent card: %s/.well-known/agent-card.json", PUBLIC_URL)
-    logger.info("CORS enabled for cross-origin requests")
     logger.info("ZeroClaw compatible endpoint: %s/a2a", PUBLIC_URL)
-    uvicorn.run(app, host=HOST, port=PORT)
+
+    server = LangChainA2AServer()
+    run_server(server, host=HOST, port=PORT)
