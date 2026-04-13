@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use serde::Deserialize;
+use crate::tools::traits::Tool;
 
 const MASKED_SECRET: &str = "***MASKED***";
 
@@ -1447,6 +1448,117 @@ pub async fn handle_claude_code_hook(
     );
 
     Json(serde_json::json!({ "ok": true }))
+}
+
+// ── A2A outbound API endpoint ──────────────────────────────────────
+
+/// Request body for A2A outbound API
+#[derive(Deserialize)]
+pub struct A2aOutboundBody {
+    /// A2A action: discover, send, status, result
+    pub action: String,
+    /// Remote agent URL (optional, uses config default if not provided)
+    pub url: Option<String>,
+    /// Bearer token for remote agent authentication
+    pub bearer_token: Option<String>,
+    /// Message to send (required for 'send' action)
+    pub message: Option<String>,
+    /// Task ID (required for 'status' and 'result' actions)
+    pub task_id: Option<String>,
+}
+
+/// POST /api/a2a/outbound — Call remote A2A agent using configured pat_token and location_id
+///
+/// This endpoint uses the A2A tool with configuration values for strands_agent_url,
+/// pat_token, and location_id, allowing the web UI to make authenticated A2A calls
+/// through the backend instead of directly.
+pub async fn handle_api_a2a_outbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<A2aOutboundBody>,
+) -> impl IntoResponse {
+    tracing::info!("A2A outbound API called with action: {}", body.action);
+    
+    if let Err(e) = require_auth(&state, &headers) {
+        tracing::warn!("A2A outbound auth failed");
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let a2a_config = &config.a2a;
+
+    // Check if A2A is enabled
+    if !a2a_config.enabled {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "A2A is not enabled in configuration"
+            })),
+        )
+            .into_response();
+    }
+
+    // Create security policy from config
+    let security = std::sync::Arc::new(crate::security::SecurityPolicy::from_config(
+        &config.autonomy,
+        &config.workspace_dir,
+    ));
+
+    // Create A2A tool with configuration
+    let tool = crate::tools::a2a::A2aTool::with_config(
+        security,
+        60, // timeout
+        a2a_config.allow_local,
+        body.url.or(a2a_config.strands_agent_url.clone()),
+        a2a_config.pat_token.clone(),
+        a2a_config.location_id.clone(),
+    );
+
+    // Build tool arguments
+    let mut args = serde_json::json!({
+        "action": body.action,
+    });
+
+    // Use provided bearer token, or fall back to configured A2A bearer token
+    if let Some(token) = &body.bearer_token {
+        args["bearer_token"] = serde_json::json!(token);
+    } else if let Some(ref token) = a2a_config.bearer_token {
+        args["bearer_token"] = serde_json::json!(token);
+    }
+    if let Some(msg) = &body.message {
+        args["message"] = serde_json::json!(msg);
+    }
+    if let Some(id) = &body.task_id {
+        args["task_id"] = serde_json::json!(id);
+    }
+
+    // Execute the A2A tool
+    match tool.execute(args).await {
+        Ok(result) => {
+            let response = serde_json::json!({
+                "success": result.success,
+                "output": result.output,
+                "error": result.error,
+            });
+            if result.success {
+                Json(response).into_response()
+            } else {
+                (StatusCode::BAD_REQUEST, Json(response)).into_response()
+            }
+        }
+        Err(e) => {
+            let err_msg: String = e.to_string();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": err_msg
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]

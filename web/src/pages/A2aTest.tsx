@@ -136,6 +136,8 @@ export default function A2aTest() {
 
   // Local A2A endpoints (same gateway server)
   const [useLocal, setUseLocal] = useState(true);
+  // Use backend tool (includes pat_token and location_id from config)
+  const [useBackendTool, setUseBackendTool] = useState(false);
 
   const actionIcons: Record<A2aAction, React.ReactNode> = {
     discover: <Search className="h-4 w-4" />,
@@ -161,6 +163,42 @@ export default function A2aTest() {
             action,
             success: true,
             output: JSON.stringify(data, null, 2),
+            timestamp: ts,
+          };
+        } else if (useBackendTool) {
+          // Use backend A2A tool with config values (pat_token, location_id)
+          const reqBody = {
+            action,
+            url: agentUrl || undefined,
+            bearer_token: localBearerToken || undefined,
+            message: action === 'send' ? message : undefined,
+            task_id: (action === 'status' || action === 'result') ? taskId : undefined,
+          };
+          const data = await a2aFetch('/api/a2a/outbound', reqBody, tok) as Record<string, unknown>;
+          const error = data.error as string | undefined;
+
+          let extractedTaskId: string | undefined;
+          let displayOutput = data.output as string || '';
+
+          // Try to extract task_id from result
+          if (action === 'send' && data.success) {
+            try {
+              const parsed = JSON.parse(displayOutput);
+              const result = parsed.result as Record<string, unknown> | undefined;
+              if (result && typeof result.id === 'string') {
+                extractedTaskId = result.id;
+              }
+            } catch {
+              // ignore parse error
+            }
+          }
+
+          out = {
+            action,
+            success: data.success as boolean,
+            output: displayOutput,
+            error: error,
+            taskId: extractedTaskId,
             timestamp: ts,
           };
         } else {
@@ -367,7 +405,7 @@ export default function A2aTest() {
             )}
 
             {useLocal && (
-              <div className="animate-fade-in">
+              <div className="animate-fade-in space-y-2">
                 <input
                   type="password"
                   value={localBearerToken}
@@ -375,6 +413,21 @@ export default function A2aTest() {
                   placeholder={t('a2a.local_bearer_token_placeholder')}
                   className="input-electric w-full px-3 py-2 text-sm"
                 />
+                {/* Backend tool toggle */}
+                <div className="flex items-center gap-2 p-2 rounded-lg border"
+                  style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-base)' }}>
+                  <input
+                    type="checkbox"
+                    id="useBackendTool"
+                    checked={useBackendTool}
+                    onChange={(e) => setUseBackendTool(e.target.checked)}
+                    className="h-4 w-4 rounded"
+                  />
+                  <label htmlFor="useBackendTool" className="text-xs cursor-pointer"
+                    style={{ color: 'var(--pc-text-secondary)' }}>
+                    Use backend A2A tool (includes pat_token & location_id from config)
+                  </label>
+                </div>
               </div>
             )}
           </div>

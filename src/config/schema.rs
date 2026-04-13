@@ -3782,6 +3782,16 @@ pub struct A2aConfig {
     /// Enable only in development for same-host multi-agent testing.
     #[serde(default)]
     pub allow_local: bool,
+    /// Default remote Strands Agent URL for A2A communication.
+    /// When set, the `a2a` tool can use this as the default target URL.
+    #[serde(default)]
+    pub strands_agent_url: Option<String>,
+    /// PAT token to include in A2A JSON-RPC params when calling Strands Agent.
+    #[serde(default)]
+    pub pat_token: Option<String>,
+    /// Location ID to include in A2A JSON-RPC params when calling Strands Agent.
+    #[serde(default)]
+    pub location_id: Option<String>,
 }
 
 impl std::fmt::Debug for A2aConfig {
@@ -3795,6 +3805,10 @@ impl std::fmt::Debug for A2aConfig {
             .field("version", &self.version)
             .field("capabilities", &self.capabilities)
             .field("notify_chat_id", &self.notify_chat_id)
+            .field("allow_local", &self.allow_local)
+            .field("strands_agent_url", &self.strands_agent_url)
+            .field("pat_token", &self.pat_token.as_ref().map(|_| "***"))
+            .field("location_id", &self.location_id)
             .finish()
     }
 }

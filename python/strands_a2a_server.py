@@ -108,6 +108,61 @@ async def a2a_proxy(request: Request) -> Response:
     """Proxy /a2a requests to / for ZeroClaw compatibility."""
     body = await request.body()
     
+    # Parse and modify the request to include pat_token and location_id in the message
+    try:
+        import json
+        body_json = json.loads(body)
+        method = body_json.get("method", "")
+        params = body_json.get("params", {})
+        
+        # Log received parameters
+        logger.info("=" * 60)
+        logger.info("Received A2A request:")
+        logger.info("  method: %s", method)
+        logger.info("  params keys: %s", list(params.keys()))
+        
+        pat_token = params.get("pat_token")
+        location_id = params.get("location_id")
+        
+        if pat_token:
+            logger.info("  pat_token: %s", pat_token)
+        if location_id:
+            logger.info("  location_id: %s", location_id)
+        
+        # If message/send, inject parameter info into the message text
+        if method == "message/send" and "message" in params:
+            message = params["message"]
+            parts = message.get("parts", [])
+            
+            # Find the text part and prepend parameter info
+            param_info = ""
+            if pat_token or location_id:
+                param_info = "[系统提示] 收到的请求参数:\n"
+                if pat_token:
+                    param_info += f"- pat_token: {pat_token}\n"
+                if location_id:
+                    param_info += f"- location_id: {location_id}\n"
+                param_info += "\n请在回复中确认已收到这些参数。\n\n"
+            
+            for part in parts:
+                if isinstance(part, dict) and part.get("kind") == "text":
+                    original_text = part.get("text", "")
+                    logger.info("  original message: %s", original_text)
+                    part["text"] = param_info + original_text
+                    logger.info("  modified message: %s", part["text"])
+                    break
+            
+            # Remove pat_token and location_id from params (they're now in the message)
+            params.pop("pat_token", None)
+            params.pop("location_id", None)
+        
+        logger.info("=" * 60)
+        
+        # Re-serialize the modified body
+        body = json.dumps(body_json).encode()
+    except Exception as e:
+        logger.warning("Failed to parse/modify request body: %s", e)
+    
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(

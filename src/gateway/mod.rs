@@ -1048,6 +1048,9 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/ws/canvas/{id}", get(canvas::handle_ws_canvas))
         // ── WebSocket node discovery ──
         .route("/ws/nodes", get(nodes::handle_ws_nodes))
+        // ── A2A outbound API (must be before static files and fallback) ──
+        .route("/api/a2a/outbound", post(api::handle_api_a2a_outbound))
+        .route("/api/a2a/outbound/", post(api::handle_api_a2a_outbound))
         // ── Static assets (web dashboard) ──
         .route("/_app/{*path}", get(static_files::handle_static))
         // ── Config PUT with larger body limit ──

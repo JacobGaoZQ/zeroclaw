@@ -18,6 +18,12 @@ pub struct A2aTool {
     timeout_secs: u64,
     /// When true, allow requests to localhost/private IPs (same-host A2A).
     allow_local: bool,
+    /// Default remote agent URL (from config).
+    default_url: Option<String>,
+    /// PAT token to include in JSON-RPC params.
+    pat_token: Option<String>,
+    /// Location ID to include in JSON-RPC params.
+    location_id: Option<String>,
 }
 
 impl A2aTool {
@@ -26,6 +32,28 @@ impl A2aTool {
             security,
             timeout_secs,
             allow_local,
+            default_url: None,
+            pat_token: None,
+            location_id: None,
+        }
+    }
+
+    /// Create A2A tool with default configuration values.
+    pub fn with_config(
+        security: Arc<SecurityPolicy>,
+        timeout_secs: u64,
+        allow_local: bool,
+        default_url: Option<String>,
+        pat_token: Option<String>,
+        location_id: Option<String>,
+    ) -> Self {
+        Self {
+            security,
+            timeout_secs,
+            allow_local,
+            default_url,
+            pat_token,
+            location_id,
         }
     }
 
@@ -123,18 +151,34 @@ impl A2aTool {
         let rpc_url = base.join("/a2a")?;
         let client = self.build_client()?;
         let request_id = uuid::Uuid::new_v4().to_string();
+        let message_id = uuid::Uuid::new_v4().to_string();
+
+        // Build params with optional pat_token and location_id
+        let mut params = json!({
+            "message": {
+                "role": "user",
+                "parts": [{ "kind": "text", "text": message }],
+                "messageId": message_id
+            }
+        });
+
+        // Add pat_token and location_id from tool config if present
+        if let Some(ref token) = self.pat_token {
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("pat_token".to_string(), json!(token));
+            }
+        }
+        if let Some(ref loc_id) = self.location_id {
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("location_id".to_string(), json!(loc_id));
+            }
+        }
 
         let body = json!({
             "jsonrpc": "2.0",
             "id": request_id,
             "method": "message/send",
-            "params": {
-                "message": {
-                    "role": "user",
-                    "parts": [{ "kind": "text", "text": message }],
-                    "messageId": uuid::Uuid::new_v4().to_string()
-                }
-            }
+            "params": params
         });
 
         let mut req = client.post(rpc_url).json(&body);
@@ -269,7 +313,7 @@ impl Tool for A2aTool {
                 },
                 "url": {
                     "type": "string",
-                    "description": "Base URL of the remote agent (e.g. http://host:port)"
+                    "description": "Base URL of the remote agent (e.g. http://host:port). Optional if strands_agent_url is configured in [a2a] section."
                 },
                 "bearer_token": {
                     "type": "string",
@@ -284,7 +328,7 @@ impl Tool for A2aTool {
                     "description": "Message to send to the remote agent (required for send action)"
                 }
             },
-            "required": ["action", "url"]
+            "required": ["action"]
         })
     }
 
@@ -310,11 +354,7 @@ impl Tool for A2aTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let url = args
-            .get("url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let url_arg = args.get("url").and_then(|v| v.as_str()).map(String::from);
         let bearer_token = args
             .get("bearer_token")
             .and_then(|v| v.as_str())
@@ -330,13 +370,18 @@ impl Tool for A2aTool {
             .unwrap_or("")
             .to_string();
 
-        if url.is_empty() {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some("Missing required parameter: url".into()),
-            });
-        }
+        // Use provided URL or fall back to configured default
+        let url = match (&url_arg, &self.default_url) {
+            (Some(u), _) => u.clone(),
+            (None, Some(default)) => default.clone(),
+            (None, None) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("Missing required parameter: url (no default URL configured in [a2a].strands_agent_url)".into()),
+                });
+            }
+        };
 
         match action.as_str() {
             "discover" => self.action_discover(&url, bearer_token.as_deref()).await,
@@ -500,7 +545,7 @@ mod tests {
 
         let required = schema["required"].as_array().unwrap();
         assert!(required.contains(&json!("action")));
-        assert!(required.contains(&json!("url")));
+        // url is no longer required - can use default from config
     }
 
     #[test]
@@ -550,11 +595,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_url_returns_error() {
+    async fn missing_url_returns_error_when_no_default() {
+        // Tool without default URL should error when url is not provided
         let tool = test_tool();
         let result = tool.execute(json!({"action": "discover"})).await.unwrap();
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap().contains("url"));
+    }
+
+    #[tokio::test]
+    async fn uses_default_url_when_configured() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Use mock server to avoid real network requests
+        let server = MockServer::start().await;
+        let card = json!({
+            "name": "Test Agent",
+            "version": "1.0",
+            "skills": []
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/agent-card.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&card))
+            .mount(&server)
+            .await;
+
+        // Tool with default URL should use it when url arg is omitted
+        let security = Arc::new(SecurityPolicy::default());
+        let tool = A2aTool::with_config(
+            security,
+            5,
+            true, // allow_local for localhost mock server
+            Some(server.uri()),
+            None,
+            None,
+        );
+        // Should not error about missing URL
+        let result = tool.execute(json!({"action": "discover"})).await.unwrap();
+        // Should succeed (mock server returns valid card)
+        assert!(result.success);
     }
 
     #[tokio::test]
@@ -842,5 +923,54 @@ mod tests {
             .unwrap();
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap().contains("read-only"));
+    }
+
+    #[tokio::test]
+    async fn send_includes_pat_token_and_location_id() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        let rpc_response = json!({
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "result": {
+                "id": "task-1",
+                "status": {"state": "completed"}
+            }
+        });
+
+        // Accept any POST to /a2a
+        Mock::given(method("POST"))
+            .and(path("/a2a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&rpc_response))
+            .mount(&server)
+            .await;
+
+        // Create tool with pat_token and location_id configured
+        let security = Arc::new(SecurityPolicy::default());
+        let tool = A2aTool::with_config(
+            security,
+            5,
+            true, // allow_local for localhost mock server
+            Some(server.uri()),
+            Some("my-pat-token".to_string()),
+            Some("location-123".to_string()),
+        );
+
+        let result = tool
+            .execute(json!({"action": "send", "message": "hello"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+
+        // Verify the request body contained pat_token and location_id
+        // by checking the server received the correct request
+        let requests = server.received_requests().await.unwrap();
+        assert!(!requests.is_empty());
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["params"]["pat_token"], "my-pat-token");
+        assert_eq!(body["params"]["location_id"], "location-123");
     }
 }
