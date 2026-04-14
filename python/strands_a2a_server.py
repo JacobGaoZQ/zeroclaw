@@ -109,6 +109,8 @@ async def a2a_proxy(request: Request) -> Response:
     body = await request.body()
     
     # Parse and modify the request to include pat_token and location_id in the message
+    received_params = {}  # Store received params for response enrichment
+    
     try:
         import json
         body_json = json.loads(body)
@@ -123,6 +125,10 @@ async def a2a_proxy(request: Request) -> Response:
         
         pat_token = params.get("pat_token")
         location_id = params.get("location_id")
+        
+        # Always store params in response (even if empty/None)
+        received_params["pat_token"] = pat_token
+        received_params["location_id"] = location_id
         
         if pat_token:
             logger.info("  pat_token: %s", pat_token)
@@ -174,8 +180,24 @@ async def a2a_proxy(request: Request) -> Response:
                 },
                 timeout=60.0,
             )
+            
+            # Enrich response with received params if applicable
+            response_content = response.content
+            try:
+                import json
+                resp_json = json.loads(response_content)
+                
+                # Always add received params to result
+                if "result" in resp_json:
+                    resp_json["result"]["received_params"] = received_params
+                    logger.info("Added received_params to response: %s", received_params)
+                
+                response_content = json.dumps(resp_json).encode()
+            except Exception as e:
+                logger.warning("Failed to enrich response with params: %s", e)
+            
             return Response(
-                content=response.content,
+                content=response_content,
                 status_code=response.status_code,
                 headers={
                     "Content-Type": "application/json",

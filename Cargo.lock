@@ -12351,6 +12351,7 @@ dependencies = [
  "extism",
  "fantoccini",
  "flate2",
+ "futures-core",
  "futures-util",
  "glob",
  "hex",

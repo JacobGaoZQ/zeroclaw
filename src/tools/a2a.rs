@@ -1,14 +1,15 @@
 //! # A2A Tool — MVP Implementation
 //!
 //! Client-side tool for interacting with remote A2A agents.
-//! Supports: `discover`, `send`, `status`, `result` (polling).
+//! Supports: `discover`, `send` (streaming), `status`, `result` (polling).
 //!
-//! **Not yet implemented:** streaming (`message/stream`), cancel,
-//! multi-turn conversations, structured/binary message parts.
+//! **Not yet implemented:** cancel, multi-turn conversations,
+//! structured/binary message parts.
 
 use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -118,8 +119,16 @@ impl A2aTool {
         let client = self.build_client()?;
 
         let mut req = client.get(card_url);
+
+        // Add custom headers from config
         if let Some(token) = bearer_token {
-            req = req.bearer_auth(token);
+            req = req.header("x-api-key", token);
+        }
+        if let Some(ref token) = self.pat_token {
+            req = req.header("x-user-token", token);
+        }
+        if let Some(ref loc_id) = self.location_id {
+            req = req.header("x-location-id", loc_id);
         }
 
         let resp = req.send().await?;
@@ -174,6 +183,7 @@ impl A2aTool {
             }
         }
 
+        // Use message/send (non-streaming)
         let body = json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -182,8 +192,16 @@ impl A2aTool {
         });
 
         let mut req = client.post(rpc_url).json(&body);
+
+        // Add custom headers from config
         if let Some(token) = bearer_token {
-            req = req.bearer_auth(token);
+            req = req.header("x-api-key", token);
+        }
+        if let Some(ref token) = self.pat_token {
+            req = req.header("x-user-token", token);
+        }
+        if let Some(ref loc_id) = self.location_id {
+            req = req.header("x-location-id", loc_id);
         }
 
         let resp = req.send().await?;
@@ -202,6 +220,170 @@ impl A2aTool {
                 output: String::new(),
                 error: Some(format!("HTTP {status}: {resp_body}")),
             })
+        }
+    }
+
+    async fn action_stream(
+        &self,
+        url: &str,
+        bearer_token: Option<&str>,
+        message: &str,
+    ) -> anyhow::Result<ToolResult> {
+        let base = self.validate_url(url)?;
+        let rpc_url = base.join("/a2a")?;
+        let client = self.build_client()?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let message_id = uuid::Uuid::new_v4().to_string();
+
+        // Build params with optional pat_token and location_id
+        let mut params = json!({
+            "message": {
+                "role": "user",
+                "parts": [{ "kind": "text", "text": message }],
+                "messageId": message_id
+            },
+            "configuration": {
+                "accepted_output_modes": ["text"]
+            }
+        });
+
+        // Add pat_token and location_id from tool config if present
+        if let Some(ref token) = self.pat_token {
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("pat_token".to_string(), json!(token));
+            }
+        }
+        if let Some(ref loc_id) = self.location_id {
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("location_id".to_string(), json!(loc_id));
+            }
+        }
+
+        // Use message/stream for streaming response
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "message/stream",
+            "params": params
+        });
+
+        let mut req = client.post(rpc_url).json(&body);
+
+        // Add custom headers from config
+        if let Some(token) = bearer_token {
+            req = req.header("x-api-key", token);
+        }
+        if let Some(ref token) = self.pat_token {
+            req = req.header("x-user-token", token);
+        }
+        if let Some(ref loc_id) = self.location_id {
+            req = req.header("x-location-id", loc_id);
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+
+        if !status.is_success() {
+            let resp_body = resp.text().await?;
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("HTTP {status}: {resp_body}")),
+            });
+        }
+
+        // Parse SSE stream
+        let text = self.parse_sse_stream(resp).await?;
+
+        if text.is_empty() {
+            Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("No content received from remote agent".into()),
+            })
+        } else {
+            Ok(ToolResult {
+                success: true,
+                output: text,
+                error: None,
+            })
+        }
+    }
+
+    /// Parse SSE stream and extract text content from artifact-update events.
+    async fn parse_sse_stream(&self, resp: reqwest::Response) -> anyhow::Result<String> {
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+        let mut collected_text = String::new();
+        let mut task_id: Option<String> = None;
+        let mut context_id: Option<String> = None;
+
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk?;
+            buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+            // Process complete lines from buffer
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Parse SSE field
+                if let Some((field, value)) = line.split_once(':') {
+                    let field = field.trim();
+                    let value = value.trim_start();
+
+                    if field == "data" && !value.is_empty() {
+                        // Parse JSON data
+                        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(value) {
+                            // Extract task_id and context_id from result
+                            if let Some(result) = json_value.get("result") {
+                                if let Some(tid) = result.get("taskId").and_then(|v| v.as_str()) {
+                                    task_id = Some(tid.to_string());
+                                }
+                                if let Some(cid) = result.get("contextId").and_then(|v| v.as_str()) {
+                                    context_id = Some(cid.to_string());
+                                }
+
+                                // Extract text from artifact-update
+                                if result.get("kind").and_then(|v| v.as_str()) == Some("artifact-update") {
+                                    if let Some(artifact) = result.get("artifact") {
+                                        if let Some(parts) = artifact.get("parts").and_then(|v| v.as_array()) {
+                                            for part in parts {
+                                                if part.get("kind").and_then(|v| v.as_str()) == Some("text") {
+                                                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                                        collected_text.push_str(text);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // If no text was collected, return metadata about the task
+        if collected_text.is_empty() {
+            let mut info = String::new();
+            if let Some(tid) = &task_id {
+                let _ = std::fmt::Write::write_fmt(&mut info, format_args!("Task ID: {tid}\n"));
+            }
+            if let Some(cid) = &context_id {
+                let _ = std::fmt::Write::write_fmt(&mut info, format_args!("Context ID: {cid}\n"));
+            }
+            if info.is_empty() {
+                info.push_str("Task completed with no text output");
+            }
+            Ok(info)
+        } else {
+            Ok(collected_text)
         }
     }
 
@@ -224,8 +406,16 @@ impl A2aTool {
         });
 
         let mut req = client.post(rpc_url).json(&body);
+
+        // Add custom headers from config
         if let Some(token) = bearer_token {
-            req = req.bearer_auth(token);
+            req = req.header("x-api-key", token);
+        }
+        if let Some(ref token) = self.pat_token {
+            req = req.header("x-user-token", token);
+        }
+        if let Some(ref loc_id) = self.location_id {
+            req = req.header("x-location-id", loc_id);
         }
 
         let resp = req.send().await?;
@@ -297,8 +487,10 @@ impl Tool for A2aTool {
 
     fn description(&self) -> &str {
         "Communicate with remote agents via the A2A (Agent-to-Agent) protocol. \
-         Supports four actions: 'discover' to fetch a remote agent's capability card, \
-         'send' to dispatch a task message, 'status' to check task progress, and \
+         Supports five actions: 'discover' to fetch a remote agent's capability card, \
+         'send' to dispatch a task message (non-streaming, returns task object), \
+         'stream' to dispatch a task and receive streaming text response, \
+         'status' to check task progress, and \
          'result' to retrieve task output artifacts."
     }
 
@@ -308,7 +500,7 @@ impl Tool for A2aTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["discover", "send", "status", "result"],
+                    "enum": ["discover", "send", "stream", "status", "result"],
                     "description": "A2A operation to perform"
                 },
                 "url": {
@@ -325,7 +517,7 @@ impl Tool for A2aTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "Message to send to the remote agent (required for send action)"
+                    "description": "Message to send to the remote agent (required for send/stream actions)"
                 }
             },
             "required": ["action"]
@@ -396,6 +588,17 @@ impl Tool for A2aTool {
                 self.action_send(&url, bearer_token.as_deref(), &message)
                     .await
             }
+            "stream" => {
+                if message.is_empty() {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("Missing required parameter: message".into()),
+                    });
+                }
+                self.action_stream(&url, bearer_token.as_deref(), &message)
+                    .await
+            }
             "status" => {
                 if task_id.is_empty() {
                     return Ok(ToolResult {
@@ -422,7 +625,7 @@ impl Tool for A2aTool {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "Unknown action: '{other}'. Valid actions: discover, send, status, result"
+                    "Unknown action: '{other}'. Valid actions: discover, send, stream, status, result"
                 )),
             }),
         }

@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { Send, Radio, Search, FileText, CheckCircle, XCircle, Clock, AlertCircle } from 'lucide-react';
+import { Send, Radio, Search, FileText, CheckCircle, XCircle, Clock, AlertCircle, Waves } from 'lucide-react';
 import { t } from '@/lib/i18n';
 import { apiOrigin, basePath } from '@/lib/basePath';
 import { getToken } from '@/lib/auth';
 
 // ── Types ────────────────────────────────────────────────────────
 
-type A2aAction = 'discover' | 'send' | 'status' | 'result';
+type A2aAction = 'discover' | 'send' | 'stream' | 'status' | 'result';
 
 interface A2aResult {
   action: A2aAction;
@@ -71,6 +71,7 @@ function ResultCard({ result, onUseTaskId }: { result: A2aResult; onUseTaskId?: 
   const actionIcon: Record<A2aAction, React.ReactNode> = {
     discover: <Search className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--pc-accent)' }} />,
     send: <Send className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--color-status-success)' }} />,
+    stream: <Waves className="h-4 w-4 flex-shrink-0" style={{ color: '#06b6d4' }} />,
     status: <Clock className="h-4 w-4 flex-shrink-0" style={{ color: '#f59e0b' }} />,
     result: <FileText className="h-4 w-4 flex-shrink-0" style={{ color: '#a78bfa' }} />,
   };
@@ -142,11 +143,12 @@ export default function A2aTest() {
   const actionIcons: Record<A2aAction, React.ReactNode> = {
     discover: <Search className="h-4 w-4" />,
     send: <Send className="h-4 w-4" />,
+    stream: <Waves className="h-4 w-4" />,
     status: <Clock className="h-4 w-4" />,
     result: <FileText className="h-4 w-4" />,
   };
 
-  const actions: A2aAction[] = ['discover', 'send', 'status', 'result'];
+  const actions: A2aAction[] = ['discover', 'send', 'stream', 'status', 'result'];
 
   async function run() {
     setLoading(true);
@@ -171,7 +173,7 @@ export default function A2aTest() {
             action,
             url: agentUrl || undefined,
             bearer_token: localBearerToken || undefined,
-            message: action === 'send' ? message : undefined,
+            message: (action === 'send' || action === 'stream') ? message : undefined,
             task_id: (action === 'status' || action === 'result') ? taskId : undefined,
           };
           const data = await a2aFetch('/api/a2a/outbound', reqBody, tok) as Record<string, unknown>;
@@ -180,7 +182,7 @@ export default function A2aTest() {
           let extractedTaskId: string | undefined;
           let displayOutput = data.output as string || '';
 
-          // Try to extract task_id from result
+          // Try to extract task_id from result (only for send, not stream)
           if (action === 'send' && data.success) {
             try {
               const parsed = JSON.parse(displayOutput);
@@ -213,6 +215,18 @@ export default function A2aTest() {
                 messageId: crypto.randomUUID(),
               },
             };
+          } else if (action === 'stream') {
+            method = 'message/stream';
+            params = {
+              message: {
+                role: 'user',
+                parts: [{ kind: 'text', text: message }],
+                messageId: crypto.randomUUID(),
+              },
+              configuration: {
+                accepted_output_modes: ['text'],
+              },
+            };
           } else if (action === 'status' || action === 'result') {
             method = 'tasks/get';
             params = { id: taskId };
@@ -229,7 +243,7 @@ export default function A2aTest() {
           let extractedTaskId: string | undefined;
           let displayOutput = JSON.stringify(data, null, 2);
 
-          if (action === 'send' && result) {
+          if ((action === 'send' || action === 'stream') && result) {
             extractedTaskId = typeof result.id === 'string' ? result.id : undefined;
           }
 
@@ -282,6 +296,18 @@ export default function A2aTest() {
                 messageId: crypto.randomUUID(),
               },
             };
+          } else if (action === 'stream') {
+            method = 'message/stream';
+            params = {
+              message: {
+                role: 'user',
+                parts: [{ kind: 'text', text: message }],
+                messageId: crypto.randomUUID(),
+              },
+              configuration: {
+                accepted_output_modes: ['text'],
+              },
+            };
           } else {
             method = 'tasks/get';
             params = { id: taskId };
@@ -301,7 +327,7 @@ export default function A2aTest() {
           let extractedTaskId: string | undefined;
           let displayOutput = resp.ok ? JSON.stringify(data, null, 2) : bodyText;
 
-          if (action === 'send' && result) {
+          if ((action === 'send' || action === 'stream') && result) {
             extractedTaskId = typeof result.id === 'string' ? result.id : undefined;
           }
           if (action === 'result' && result?.artifacts) {
@@ -338,7 +364,7 @@ export default function A2aTest() {
 
   const canRun =
     (useLocal || agentUrl.trim().length > 0) &&
-    (action !== 'send' || message.trim().length > 0) &&
+    ((action === 'send' || action === 'stream') || message.trim().length > 0) &&
     (action !== 'status' && action !== 'result' || taskId.trim().length > 0 || useLocal && action === 'status');
 
   return (
@@ -455,7 +481,7 @@ export default function A2aTest() {
           </div>
 
           {/* Params */}
-          {(action === 'send') && (
+          {(action === 'send' || action === 'stream') && (
             <div className="card p-4 space-y-2 animate-fade-in">
               <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--pc-text-muted)' }}>
                 {t('a2a.message')}
