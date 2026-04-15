@@ -819,6 +819,12 @@ enum MemoryCommands {
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
+    // Load environment variables from .env file (if present).
+    // This allows users to configure A2A and other settings via .env.
+    if let Err(e) = dotenvy::dotenv() {
+        tracing::debug!("No .env file loaded: {}", e);
+    }
+
     // Install default crypto provider for Rustls TLS.
     // This prevents the error: "could not automatically determine the process-level CryptoProvider"
     // when both aws-lc-rs and ring features are available (or neither is explicitly selected).

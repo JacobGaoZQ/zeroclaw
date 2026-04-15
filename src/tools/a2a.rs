@@ -25,6 +25,8 @@ pub struct A2aTool {
     pat_token: Option<String>,
     /// Location ID to include in JSON-RPC params.
     location_id: Option<String>,
+    /// API key (x-api-key header) for authenticating when calling Strands Agent.
+    client_token: Option<String>,
 }
 
 impl A2aTool {
@@ -36,6 +38,7 @@ impl A2aTool {
             default_url: None,
             pat_token: None,
             location_id: None,
+            client_token: None,
         }
     }
 
@@ -47,6 +50,7 @@ impl A2aTool {
         default_url: Option<String>,
         pat_token: Option<String>,
         location_id: Option<String>,
+        client_token: Option<String>,
     ) -> Self {
         Self {
             security,
@@ -55,6 +59,7 @@ impl A2aTool {
             default_url,
             pat_token,
             location_id,
+            client_token,
         }
     }
 
@@ -120,8 +125,10 @@ impl A2aTool {
 
         let mut req = client.get(card_url);
 
-        // Add custom headers from config
+        // Add custom headers: use bearer_token if provided, otherwise fall back to client_token
         if let Some(token) = bearer_token {
+            req = req.header("x-api-key", token);
+        } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
         if let Some(ref token) = self.pat_token {
@@ -193,8 +200,10 @@ impl A2aTool {
 
         let mut req = client.post(rpc_url).json(&body);
 
-        // Add custom headers from config
+        // Add custom headers: use bearer_token if provided, otherwise fall back to client_token
         if let Some(token) = bearer_token {
+            req = req.header("x-api-key", token);
+        } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
         if let Some(ref token) = self.pat_token {
@@ -269,8 +278,10 @@ impl A2aTool {
 
         let mut req = client.post(rpc_url).json(&body);
 
-        // Add custom headers from config
+        // Add custom headers: use bearer_token if provided, otherwise fall back to client_token
         if let Some(token) = bearer_token {
+            req = req.header("x-api-key", token);
+        } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
         if let Some(ref token) = self.pat_token {
@@ -407,8 +418,10 @@ impl A2aTool {
 
         let mut req = client.post(rpc_url).json(&body);
 
-        // Add custom headers from config
+        // Add custom headers: use bearer_token if provided, otherwise fall back to client_token
         if let Some(token) = bearer_token {
+            req = req.header("x-api-key", token);
+        } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
         if let Some(ref token) = self.pat_token {
@@ -563,7 +576,7 @@ impl Tool for A2aTool {
             .to_string();
 
         // Use provided URL or fall back to configured default
-        let url = match (&url_arg, &self.default_url) {
+        let url: String = match (&url_arg, &self.default_url) {
             (Some(u), _) => u.clone(),
             (None, Some(default)) => default.clone(),
             (None, None) => {
@@ -832,6 +845,7 @@ mod tests {
             5,
             true, // allow_local for localhost mock server
             Some(server.uri()),
+            None,
             None,
             None,
         );
@@ -1160,6 +1174,7 @@ mod tests {
             Some(server.uri()),
             Some("my-pat-token".to_string()),
             Some("location-123".to_string()),
+            None,
         );
 
         let result = tool

@@ -1505,6 +1505,11 @@ pub async fn handle_api_a2a_outbound(
         &config.workspace_dir,
     ));
 
+    // Read client_token from config or environment variable
+    let client_token = a2a_config.client_token.clone().or_else(|| {
+        std::env::var("A2A_CLIENT_TOKEN").ok()
+    });
+
     // Create A2A tool with configuration
     let tool = crate::tools::a2a::A2aTool::with_config(
         security,
@@ -1513,6 +1518,7 @@ pub async fn handle_api_a2a_outbound(
         body.url.or(a2a_config.strands_agent_url.clone()),
         a2a_config.pat_token.clone(),
         a2a_config.location_id.clone(),
+        client_token,
     );
 
     // Build tool arguments

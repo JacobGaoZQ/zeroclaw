@@ -3792,6 +3792,10 @@ pub struct A2aConfig {
     /// Location ID to include in A2A JSON-RPC params when calling Strands Agent.
     #[serde(default)]
     pub location_id: Option<String>,
+    /// API key (x-api-key header) for ZeroClaw to authenticate when calling Strands Agent.
+    /// Can also be set via A2A_CLIENT_TOKEN environment variable.
+    #[serde(default)]
+    pub client_token: Option<String>,
 }
 
 impl std::fmt::Debug for A2aConfig {
@@ -3809,6 +3813,7 @@ impl std::fmt::Debug for A2aConfig {
             .field("strands_agent_url", &self.strands_agent_url)
             .field("pat_token", &self.pat_token.as_ref().map(|_| "***"))
             .field("location_id", &self.location_id)
+            .field("client_token", &self.client_token.as_ref().map(|_| "***"))
             .finish()
     }
 }
@@ -10347,6 +10352,85 @@ impl Config {
                 "conversational_ai.enabled = true but conversational AI features are not yet \
                  implemented; this section is reserved for future use and will be ignored"
             );
+        }
+
+        // A2A environment variable overrides
+        if let Ok(enabled) = std::env::var("A2A_ENABLED") {
+            if !enabled.trim().is_empty() {
+                match enabled.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => self.a2a.enabled = true,
+                    "0" | "false" | "no" | "off" => self.a2a.enabled = false,
+                    _ => tracing::warn!(
+                        "Ignoring invalid A2A_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                    ),
+                }
+            }
+        }
+        if let Ok(agent_name) = std::env::var("A2A_AGENT_NAME") {
+            if !agent_name.is_empty() {
+                self.a2a.agent_name = Some(agent_name);
+            }
+        }
+        if let Ok(description) = std::env::var("A2A_DESCRIPTION") {
+            if !description.is_empty() {
+                self.a2a.description = Some(description);
+            }
+        }
+        if let Ok(public_url) = std::env::var("A2A_PUBLIC_URL") {
+            if !public_url.is_empty() {
+                self.a2a.public_url = Some(public_url);
+            }
+        }
+        if let Ok(bearer_token) = std::env::var("A2A_BEARER_TOKEN") {
+            if !bearer_token.is_empty() {
+                self.a2a.bearer_token = Some(bearer_token);
+            }
+        }
+        if let Ok(version) = std::env::var("A2A_VERSION") {
+            if !version.is_empty() {
+                self.a2a.version = Some(version);
+            }
+        }
+        if let Ok(capabilities) = std::env::var("A2A_CAPABILITIES") {
+            if !capabilities.is_empty() {
+                self.a2a.capabilities = capabilities.split(',').map(|s| s.trim().to_string()).collect();
+            }
+        }
+        if let Ok(notify_chat_id) = std::env::var("A2A_NOTIFY_CHAT_ID") {
+            if let Ok(chat_id) = notify_chat_id.parse::<i64>() {
+                self.a2a.notify_chat_id = Some(chat_id);
+            }
+        }
+        if let Ok(allow_local) = std::env::var("A2A_ALLOW_LOCAL") {
+            if !allow_local.trim().is_empty() {
+                match allow_local.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => self.a2a.allow_local = true,
+                    "0" | "false" | "no" | "off" => self.a2a.allow_local = false,
+                    _ => tracing::warn!(
+                        "Ignoring invalid A2A_ALLOW_LOCAL (valid: 1|0|true|false|yes|no|on|off)"
+                    ),
+                }
+            }
+        }
+        if let Ok(strands_agent_url) = std::env::var("A2A_STRANDS_AGENT_URL") {
+            if !strands_agent_url.is_empty() {
+                self.a2a.strands_agent_url = Some(strands_agent_url);
+            }
+        }
+        if let Ok(pat_token) = std::env::var("A2A_PAT_TOKEN") {
+            if !pat_token.is_empty() {
+                self.a2a.pat_token = Some(pat_token);
+            }
+        }
+        if let Ok(location_id) = std::env::var("A2A_LOCATION_ID") {
+            if !location_id.is_empty() {
+                self.a2a.location_id = Some(location_id);
+            }
+        }
+        if let Ok(client_token) = std::env::var("A2A_CLIENT_TOKEN") {
+            if !client_token.is_empty() {
+                self.a2a.client_token = Some(client_token);
+            }
         }
     }
 

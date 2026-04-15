@@ -126,8 +126,6 @@ function ResultCard({ result, onUseTaskId }: { result: A2aResult; onUseTaskId?: 
 
 export default function A2aTest() {
   const [action, setAction] = useState<A2aAction>('discover');
-  const [agentUrl, setAgentUrl] = useState('');
-  const [bearerToken, setBearerToken] = useState('');
   const [localBearerToken, setLocalBearerToken] = useState('');
   const [message, setMessage] = useState('');
   const [taskId, setTaskId] = useState('');
@@ -135,10 +133,8 @@ export default function A2aTest() {
   const [results, setResults] = useState<A2aResult[]>([]);
   const [rpcId, setRpcId] = useState(1);
 
-  // Local A2A endpoints (same gateway server)
-  const [useLocal, setUseLocal] = useState(true);
   // Use backend tool (includes pat_token and location_id from config)
-  const [useBackendTool, setUseBackendTool] = useState(false);
+  const [useBackendTool, setUseBackendTool] = useState(true);
 
   const actionIcons: Record<A2aAction, React.ReactNode> = {
     discover: <Search className="h-4 w-4" />,
@@ -156,193 +152,110 @@ export default function A2aTest() {
     try {
       let out: A2aResult;
 
-      if (useLocal) {
-        // Call the local gateway's A2A endpoints directly
-        const tok = localBearerToken.trim() || undefined;
-        if (action === 'discover') {
-          const data = await a2aFetch('/.well-known/agent-card.json', undefined, tok);
-          out = {
-            action,
-            success: true,
-            output: JSON.stringify(data, null, 2),
-            timestamp: ts,
-          };
-        } else if (useBackendTool) {
-          // Use backend A2A tool with config values (pat_token, location_id)
-          const reqBody = {
-            action,
-            url: agentUrl || undefined,
-            bearer_token: localBearerToken || undefined,
-            message: (action === 'send' || action === 'stream') ? message : undefined,
-            task_id: (action === 'status' || action === 'result') ? taskId : undefined,
-          };
-          const data = await a2aFetch('/api/a2a/outbound', reqBody, tok) as Record<string, unknown>;
-          const error = data.error as string | undefined;
+      // Call the local gateway's A2A endpoints directly
+      const tok = localBearerToken.trim() || undefined;
+      if (action === 'discover') {
+        const data = await a2aFetch('/.well-known/agent-card.json', undefined, tok);
+        out = {
+          action,
+          success: true,
+          output: JSON.stringify(data, null, 2),
+          timestamp: ts,
+        };
+      } else if (useBackendTool) {
+        // Use backend A2A tool with config values (pat_token, location_id)
+        const reqBody = {
+          action,
+          bearer_token: localBearerToken || undefined,
+          message: (action === 'send' || action === 'stream') ? message : undefined,
+          task_id: (action === 'status' || action === 'result') ? taskId : undefined,
+        };
+        const data = await a2aFetch('/api/a2a/outbound', reqBody, tok) as Record<string, unknown>;
+        const error = data.error as string | undefined;
 
-          let extractedTaskId: string | undefined;
-          let displayOutput = data.output as string || '';
+        let extractedTaskId: string | undefined;
+        let displayOutput = data.output as string || '';
 
-          // Try to extract task_id from result (only for send, not stream)
-          if (action === 'send' && data.success) {
-            try {
-              const parsed = JSON.parse(displayOutput);
-              const result = parsed.result as Record<string, unknown> | undefined;
-              if (result && typeof result.id === 'string') {
-                extractedTaskId = result.id;
-              }
-            } catch {
-              // ignore parse error
+        // Try to extract task_id from result (only for send, not stream)
+        if (action === 'send' && data.success) {
+          try {
+            const parsed = JSON.parse(displayOutput);
+            const result = parsed.result as Record<string, unknown> | undefined;
+            if (result && typeof result.id === 'string') {
+              extractedTaskId = result.id;
             }
+          } catch {
+            // ignore parse error
           }
-
-          out = {
-            action,
-            success: data.success as boolean,
-            output: displayOutput,
-            error: error,
-            taskId: extractedTaskId,
-            timestamp: ts,
-          };
-        } else {
-          let method: string;
-          let params: unknown;
-          if (action === 'send') {
-            method = 'message/send';
-            params = {
-              message: {
-                role: 'user',
-                parts: [{ kind: 'text', text: message }],
-                messageId: crypto.randomUUID(),
-              },
-            };
-          } else if (action === 'stream') {
-            method = 'message/stream';
-            params = {
-              message: {
-                role: 'user',
-                parts: [{ kind: 'text', text: message }],
-                messageId: crypto.randomUUID(),
-              },
-              configuration: {
-                accepted_output_modes: ['text'],
-              },
-            };
-          } else if (action === 'status' || action === 'result') {
-            method = 'tasks/get';
-            params = { id: taskId };
-          } else {
-            throw new Error('Unknown action');
-          }
-
-          const reqBody = buildRpcRequest(method, params, rpcId);
-          setRpcId((n) => n + 1);
-          const data = await a2aFetch('/a2a', reqBody, tok) as Record<string, unknown>;
-          const result = data.result as Record<string, unknown> | undefined;
-          const error = data.error as { code: number; message: string } | undefined;
-
-          let extractedTaskId: string | undefined;
-          let displayOutput = JSON.stringify(data, null, 2);
-
-          if ((action === 'send' || action === 'stream') && result) {
-            extractedTaskId = typeof result.id === 'string' ? result.id : undefined;
-          }
-
-          if (action === 'result' && result) {
-            const artifacts = result.artifacts;
-            if (artifacts) {
-              displayOutput = JSON.stringify(artifacts, null, 2);
-            }
-          }
-
-          out = {
-            action,
-            success: !error,
-            output: displayOutput,
-            error: error ? `${error.code}: ${error.message}` : undefined,
-            taskId: extractedTaskId,
-            timestamp: ts,
-          };
         }
+
+        out = {
+          action,
+          success: data.success as boolean,
+          output: displayOutput,
+          error: error,
+          taskId: extractedTaskId,
+          timestamp: ts,
+        };
       } else {
-        // Remote agent call via URL
-        const base = agentUrl.replace(/\/$/, '');
-        const token = bearerToken || undefined;
-        const fetchHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (token) fetchHeaders['Authorization'] = `Bearer ${token}`;
-
-        if (action === 'discover') {
-          const discoverUrl = `${base}/.well-known/agent-card.json`;
-          console.log('Fetching:', discoverUrl, 'with headers:', fetchHeaders);
-          const resp = await fetch(discoverUrl, { headers: fetchHeaders });
-          console.log('Response status:', resp.status, 'ok:', resp.ok);
-          const body = await resp.text();
-          console.log('Response body:', body.substring(0, 200));
-          out = {
-            action,
-            success: resp.ok,
-            output: resp.ok ? JSON.stringify(JSON.parse(body), null, 2) : '',
-            error: resp.ok ? undefined : `HTTP ${resp.status}: ${body}`,
-            timestamp: ts,
+        let method: string;
+        let params: unknown;
+        if (action === 'send') {
+          method = 'message/send';
+          params = {
+            message: {
+              role: 'user',
+              parts: [{ kind: 'text', text: message }],
+              messageId: crypto.randomUUID(),
+            },
           };
+        } else if (action === 'stream') {
+          method = 'message/stream';
+          params = {
+            message: {
+              role: 'user',
+              parts: [{ kind: 'text', text: message }],
+              messageId: crypto.randomUUID(),
+            },
+            configuration: {
+              accepted_output_modes: ['text'],
+            },
+          };
+        } else if (action === 'status' || action === 'result') {
+          method = 'tasks/get';
+          params = { id: taskId };
         } else {
-          let method: string;
-          let params: unknown;
-          if (action === 'send') {
-            method = 'message/send';
-            params = {
-              message: {
-                role: 'user',
-                parts: [{ kind: 'text', text: message }],
-                messageId: crypto.randomUUID(),
-              },
-            };
-          } else if (action === 'stream') {
-            method = 'message/stream';
-            params = {
-              message: {
-                role: 'user',
-                parts: [{ kind: 'text', text: message }],
-                messageId: crypto.randomUUID(),
-              },
-              configuration: {
-                accepted_output_modes: ['text'],
-              },
-            };
-          } else {
-            method = 'tasks/get';
-            params = { id: taskId };
-          }
-          const reqBody = buildRpcRequest(method, params, rpcId);
-          setRpcId((n) => n + 1);
-          const resp = await fetch(`${base}/a2a`, {
-            method: 'POST',
-            headers: fetchHeaders,
-            body: JSON.stringify(reqBody),
-          });
-          const bodyText = await resp.text();
-          const data = resp.ok ? JSON.parse(bodyText) as Record<string, unknown> : null;
-          const error = data?.error as { code: number; message: string } | undefined;
-          const result = data?.result as Record<string, unknown> | undefined;
-
-          let extractedTaskId: string | undefined;
-          let displayOutput = resp.ok ? JSON.stringify(data, null, 2) : bodyText;
-
-          if ((action === 'send' || action === 'stream') && result) {
-            extractedTaskId = typeof result.id === 'string' ? result.id : undefined;
-          }
-          if (action === 'result' && result?.artifacts) {
-            displayOutput = JSON.stringify(result.artifacts, null, 2);
-          }
-
-          out = {
-            action,
-            success: resp.ok && !error,
-            output: displayOutput,
-            error: !resp.ok ? `HTTP ${resp.status}: ${bodyText}` : error ? `${error.code}: ${error.message}` : undefined,
-            taskId: extractedTaskId,
-            timestamp: ts,
-          };
+          throw new Error('Unknown action');
         }
+
+        const reqBody = buildRpcRequest(method, params, rpcId);
+        setRpcId((n) => n + 1);
+        const data = await a2aFetch('/a2a', reqBody, tok) as Record<string, unknown>;
+        const result = data.result as Record<string, unknown> | undefined;
+        const error = data.error as { code: number; message: string } | undefined;
+
+        let extractedTaskId: string | undefined;
+        let displayOutput = JSON.stringify(data, null, 2);
+
+        if ((action === 'send' || action === 'stream') && result) {
+          extractedTaskId = typeof result.id === 'string' ? result.id : undefined;
+        }
+
+        if (action === 'result' && result) {
+          const artifacts = result.artifacts;
+          if (artifacts) {
+            displayOutput = JSON.stringify(artifacts, null, 2);
+          }
+        }
+
+        out = {
+          action,
+          success: !error,
+          output: displayOutput,
+          error: error ? `${error.code}: ${error.message}` : undefined,
+          taskId: extractedTaskId,
+          timestamp: ts,
+        };
       }
 
       setResults((prev) => [out, ...prev]);
@@ -363,9 +276,8 @@ export default function A2aTest() {
   }
 
   const canRun =
-    (useLocal || agentUrl.trim().length > 0) &&
-    ((action === 'send' || action === 'stream') || message.trim().length > 0) &&
-    (action !== 'status' && action !== 'result' || taskId.trim().length > 0 || useLocal && action === 'status');
+    (action === 'discover' || action === 'status' || action === 'result' || message.trim().length > 0) &&
+    (action !== 'status' && action !== 'result' || taskId.trim().length > 0);
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -383,79 +295,38 @@ export default function A2aTest() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Left: Controls */}
         <div className="space-y-4">
-          {/* Mode toggle */}
+          {/* Mode toggle - Local Gateway only */}
           <div className="card p-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--pc-text-muted)' }}>{t('a2a.target')}</p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setUseLocal(true)}
-                className="flex-1 py-2 text-xs font-medium rounded-xl border transition-all"
-                style={{
-                  background: useLocal ? 'var(--pc-accent-glow)' : 'transparent',
-                  borderColor: useLocal ? 'var(--pc-accent-dim)' : 'var(--pc-border)',
-                  color: useLocal ? 'var(--pc-accent-light)' : 'var(--pc-text-muted)',
-                }}
-              >
-                {t('a2a.local_gateway')}
-              </button>
-              <button
-                onClick={() => setUseLocal(false)}
-                className="flex-1 py-2 text-xs font-medium rounded-xl border transition-all"
-                style={{
-                  background: !useLocal ? 'var(--pc-accent-glow)' : 'transparent',
-                  borderColor: !useLocal ? 'var(--pc-accent-dim)' : 'var(--pc-border)',
-                  color: !useLocal ? 'var(--pc-accent-light)' : 'var(--pc-text-muted)',
-                }}
-              >
-                {t('a2a.remote_agent')}
-              </button>
+            <div className="p-2 rounded-lg border text-xs font-medium text-center"
+              style={{ borderColor: 'var(--pc-accent-dim)', background: 'var(--pc-accent-glow)', color: 'var(--pc-accent-light)' }}>
+              {t('a2a.local_gateway')}
             </div>
 
-            {!useLocal && (
-              <div className="space-y-2 animate-fade-in">
+            <div className="animate-fade-in space-y-2">
+              <input
+                type="password"
+                value={localBearerToken}
+                onChange={(e) => setLocalBearerToken(e.target.value)}
+                placeholder={t('a2a.local_bearer_token_placeholder')}
+                className="input-electric w-full px-3 py-2 text-sm"
+              />
+              {/* Backend tool toggle */}
+              <div className="flex items-center gap-2 p-2 rounded-lg border"
+                style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-base)' }}>
                 <input
-                  type="url"
-                  value={agentUrl}
-                  onChange={(e) => setAgentUrl(e.target.value)}
-                  placeholder={t('a2a.agent_url_placeholder')}
-                  className="input-electric w-full px-3 py-2 text-sm"
+                  type="checkbox"
+                  id="useBackendTool"
+                  checked={useBackendTool}
+                  onChange={(e) => setUseBackendTool(e.target.checked)}
+                  className="h-4 w-4 rounded"
                 />
-                <input
-                  type="password"
-                  value={bearerToken}
-                  onChange={(e) => setBearerToken(e.target.value)}
-                  placeholder={t('a2a.bearer_token_placeholder')}
-                  className="input-electric w-full px-3 py-2 text-sm"
-                />
+                <label htmlFor="useBackendTool" className="text-xs cursor-pointer"
+                  style={{ color: 'var(--pc-text-secondary)' }}>
+                  Use backend A2A tool (includes pat_token & location_id from config)
+                </label>
               </div>
-            )}
-
-            {useLocal && (
-              <div className="animate-fade-in space-y-2">
-                <input
-                  type="password"
-                  value={localBearerToken}
-                  onChange={(e) => setLocalBearerToken(e.target.value)}
-                  placeholder={t('a2a.local_bearer_token_placeholder')}
-                  className="input-electric w-full px-3 py-2 text-sm"
-                />
-                {/* Backend tool toggle */}
-                <div className="flex items-center gap-2 p-2 rounded-lg border"
-                  style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-base)' }}>
-                  <input
-                    type="checkbox"
-                    id="useBackendTool"
-                    checked={useBackendTool}
-                    onChange={(e) => setUseBackendTool(e.target.checked)}
-                    className="h-4 w-4 rounded"
-                  />
-                  <label htmlFor="useBackendTool" className="text-xs cursor-pointer"
-                    style={{ color: 'var(--pc-text-secondary)' }}>
-                    Use backend A2A tool (includes pat_token & location_id from config)
-                  </label>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
 
           {/* Action selector */}
