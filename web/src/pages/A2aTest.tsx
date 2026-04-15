@@ -17,15 +17,6 @@ interface A2aResult {
   timestamp: number;
 }
 
-function buildRpcRequest(method: string, params: unknown, id: number) {
-  return {
-    jsonrpc: '2.0',
-    id,
-    method,
-    params,
-  };
-}
-
 async function a2aFetch(path: string, body?: unknown, a2aToken?: string): Promise<unknown> {
   // Prefer an explicit A2A bearer token; fall back to the UI pairing token.
   const token = a2aToken || getToken();
@@ -126,15 +117,10 @@ function ResultCard({ result, onUseTaskId }: { result: A2aResult; onUseTaskId?: 
 
 export default function A2aTest() {
   const [action, setAction] = useState<A2aAction>('discover');
-  const [localBearerToken, setLocalBearerToken] = useState('');
   const [message, setMessage] = useState('');
   const [taskId, setTaskId] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<A2aResult[]>([]);
-  const [rpcId, setRpcId] = useState(1);
-
-  // Use backend tool (includes pat_token and location_id from config)
-  const [useBackendTool, setUseBackendTool] = useState(true);
 
   const actionIcons: Record<A2aAction, React.ReactNode> = {
     discover: <Search className="h-4 w-4" />,
@@ -152,25 +138,22 @@ export default function A2aTest() {
     try {
       let out: A2aResult;
 
-      // Call the local gateway's A2A endpoints directly
-      const tok = localBearerToken.trim() || undefined;
       if (action === 'discover') {
-        const data = await a2aFetch('/.well-known/agent-card.json', undefined, tok);
+        const data = await a2aFetch('/.well-known/agent-card.json');
         out = {
           action,
           success: true,
           output: JSON.stringify(data, null, 2),
           timestamp: ts,
         };
-      } else if (useBackendTool) {
+      } else {
         // Use backend A2A tool with config values (pat_token, location_id)
         const reqBody = {
           action,
-          bearer_token: localBearerToken || undefined,
           message: (action === 'send' || action === 'stream') ? message : undefined,
           task_id: (action === 'status' || action === 'result') ? taskId : undefined,
         };
-        const data = await a2aFetch('/api/a2a/outbound', reqBody, tok) as Record<string, unknown>;
+        const data = await a2aFetch('/api/a2a/outbound', reqBody) as Record<string, unknown>;
         const error = data.error as string | undefined;
 
         let extractedTaskId: string | undefined;
@@ -194,65 +177,6 @@ export default function A2aTest() {
           success: data.success as boolean,
           output: displayOutput,
           error: error,
-          taskId: extractedTaskId,
-          timestamp: ts,
-        };
-      } else {
-        let method: string;
-        let params: unknown;
-        if (action === 'send') {
-          method = 'message/send';
-          params = {
-            message: {
-              role: 'user',
-              parts: [{ kind: 'text', text: message }],
-              messageId: crypto.randomUUID(),
-            },
-          };
-        } else if (action === 'stream') {
-          method = 'message/stream';
-          params = {
-            message: {
-              role: 'user',
-              parts: [{ kind: 'text', text: message }],
-              messageId: crypto.randomUUID(),
-            },
-            configuration: {
-              accepted_output_modes: ['text'],
-            },
-          };
-        } else if (action === 'status' || action === 'result') {
-          method = 'tasks/get';
-          params = { id: taskId };
-        } else {
-          throw new Error('Unknown action');
-        }
-
-        const reqBody = buildRpcRequest(method, params, rpcId);
-        setRpcId((n) => n + 1);
-        const data = await a2aFetch('/a2a', reqBody, tok) as Record<string, unknown>;
-        const result = data.result as Record<string, unknown> | undefined;
-        const error = data.error as { code: number; message: string } | undefined;
-
-        let extractedTaskId: string | undefined;
-        let displayOutput = JSON.stringify(data, null, 2);
-
-        if ((action === 'send' || action === 'stream') && result) {
-          extractedTaskId = typeof result.id === 'string' ? result.id : undefined;
-        }
-
-        if (action === 'result' && result) {
-          const artifacts = result.artifacts;
-          if (artifacts) {
-            displayOutput = JSON.stringify(artifacts, null, 2);
-          }
-        }
-
-        out = {
-          action,
-          success: !error,
-          output: displayOutput,
-          error: error ? `${error.code}: ${error.message}` : undefined,
           taskId: extractedTaskId,
           timestamp: ts,
         };
@@ -301,31 +225,6 @@ export default function A2aTest() {
             <div className="p-2 rounded-lg border text-xs font-medium text-center"
               style={{ borderColor: 'var(--pc-accent-dim)', background: 'var(--pc-accent-glow)', color: 'var(--pc-accent-light)' }}>
               {t('a2a.local_gateway')}
-            </div>
-
-            <div className="animate-fade-in space-y-2">
-              <input
-                type="password"
-                value={localBearerToken}
-                onChange={(e) => setLocalBearerToken(e.target.value)}
-                placeholder={t('a2a.local_bearer_token_placeholder')}
-                className="input-electric w-full px-3 py-2 text-sm"
-              />
-              {/* Backend tool toggle */}
-              <div className="flex items-center gap-2 p-2 rounded-lg border"
-                style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-base)' }}>
-                <input
-                  type="checkbox"
-                  id="useBackendTool"
-                  checked={useBackendTool}
-                  onChange={(e) => setUseBackendTool(e.target.checked)}
-                  className="h-4 w-4 rounded"
-                />
-                <label htmlFor="useBackendTool" className="text-xs cursor-pointer"
-                  style={{ color: 'var(--pc-text-secondary)' }}>
-                  Use backend A2A tool (includes pat_token & location_id from config)
-                </label>
-              </div>
             </div>
           </div>
 

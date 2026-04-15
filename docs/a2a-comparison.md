@@ -7,7 +7,102 @@
 
 ---
 
-## 一、PR #4166 原始改动概览
+## 一、环境配置 (.env)
+
+项目启动时会自动加载 `.env` 文件（通过 `dotenvy` 库），以下是 A2A 相关的环境变量配置：
+
+### 1.1 完整配置示例
+
+```bash
+# ── A2A (Agent-to-Agent) Protocol ───────────────────────────────
+# 启用 A2A 协议服务端和客户端工具
+A2A_ENABLED=true
+
+# Agent 显示名称（在 agent card 中展示）
+A2A_AGENT_NAME=ZeroClaw Agent
+
+# Agent 描述信息
+A2A_DESCRIPTION=ZeroClaw autonomous agent
+
+# 公共 URL（用于 agent card，如不设置则使用 gateway 绑定地址）
+A2A_PUBLIC_URL=https://agent.example.com
+
+# Bearer Token（用于认证入站 A2A 请求）
+A2A_BEARER_TOKEN=your-secret-token-here
+
+# 协议版本（默认为 crate 版本）
+A2A_VERSION=1.0.0
+
+# 能力标签（逗号分隔）
+A2A_CAPABILITIES=code,search,general
+
+# Telegram 群 ID（用于 A2A 活动通知）
+A2A_NOTIFY_CHAT_ID=-1001234567890
+
+# 允许本地/私有 IP 访问（仅开发环境使用）
+A2A_ALLOW_LOCAL=false
+
+# 远程 Strands Agent URL（A2A 工具默认目标地址）
+A2A_STRANDS_AGENT_URL=http://120.26.206.98:8000/a2a
+
+# Strands Agent PAT Token（注入到 JSON-RPC params 中）
+A2A_PAT_TOKEN=c062fe5c-2a8f-4d38-a655-ab7046eb5bb3
+
+# Strands Agent Location ID（注入到 JSON-RPC params 中）
+A2A_LOCATION_ID=20273f50-0fe4-4eff-b896-8b86bfa13b00
+
+# API Key（x-api-key header，用于认证远程 Strands Agent）
+A2A_CLIENT_TOKEN=your-api-key-here
+```
+
+### 1.2 配置项说明
+
+| 环境变量 | 必需 | 默认值 | 说明 |
+|----------|------|--------|------|
+| `A2A_ENABLED` | 否 | `false` | 启用 A2A 协议 |
+| `A2A_AGENT_NAME` | 否 | `ZeroClaw Agent` | Agent 名称 |
+| `A2A_DESCRIPTION` | 否 | `ZeroClaw autonomous agent` | Agent 描述 |
+| `A2A_PUBLIC_URL` | 否 | 自动推导 | Agent card 公共 URL |
+| `A2A_BEARER_TOKEN` | 否 | - | 入站请求认证 Token |
+| `A2A_VERSION` | 否 | crate 版本 | 协议版本 |
+| `A2A_CAPABILITIES` | 否 | - | 能力标签（逗号分隔） |
+| `A2A_NOTIFY_CHAT_ID` | 否 | - | Telegram 通知群 ID |
+| `A2A_ALLOW_LOCAL` | 否 | `false` | 允许本地 IP（开发用） |
+| `A2A_STRANDS_AGENT_URL` | 否 | - | 默认远程 Agent URL |
+| `A2A_PAT_TOKEN` | 否 | - | PAT Token（JSON-RPC params） |
+| `A2A_LOCATION_ID` | 否 | - | Location ID（JSON-RPC params） |
+| `A2A_CLIENT_TOKEN` | 否 | - | API Key（x-api-key header） |
+
+### 1.3 快速启动
+
+1. 复制 `.env.example` 到 `.env`：
+   ```bash
+   cp .env.example .env
+   ```
+
+2. 编辑 `.env`，设置必需的 A2A 配置：
+   ```bash
+   # 启用 A2A
+   A2A_ENABLED=true
+   
+   # 配置远程 Strands Agent
+   A2A_STRANDS_AGENT_URL=http://your-strands-agent:8000/a2a
+   A2A_PAT_TOKEN=your-pat-token
+   A2A_LOCATION_ID=your-location-id
+   A2A_CLIENT_TOKEN=your-api-key
+   ```
+
+3. 启动 Gateway：
+   ```bash
+   cargo build --release
+   ./target/release/zeroclaw gateway start
+   ```
+
+4. 访问 A2A 测试页面：`http://localhost:42617/` → A2A Test
+
+---
+
+## 二、PR #4166 原始改动概览
 
 PR #4166 是 ZeroClaw 的 A2A (Agent-to-Agent) 协议的**初始实现**，共修改 **12 个文件**，新增 **2191 行**代码。
 
@@ -83,6 +178,7 @@ PR #4166 是 ZeroClaw 的 A2A (Agent-to-Agent) 协议的**初始实现**，共�
 | `strands_agent_url` | ❌ | ✅ **新增** | 默认远程 Strands Agent URL |
 | `pat_token` | ❌ | ✅ **新增** | Strands Agent PAT Token |
 | `location_id` | ❌ | ✅ **新增** | Strands Agent Location ID |
+| `client_token` | ❌ | ✅ **新增** | API Key（x-api-key header） |
 
 ### 2.2 A2A 客户端工具 (`src/tools/a2a.rs`) — 新增功能
 
@@ -185,9 +281,11 @@ async fn action_stream(&self, url: &str, bearer_token: Option<&str>, message: &s
 3. **`strands_agent_url`** — 默认远程 Agent URL 配置
 4. **`pat_token`** — Strands Agent PAT Token 配置
 5. **`location_id`** — Strands Agent Location ID 配置
-6. **`allow_local`** — SSRF 本地访问开关
-7. **前端 A2A 测试页面** — `web/src/pages/A2aTest.tsx`
-8. **完整的 A2A 文档体系** — 测试报告、部署指南、配置说明等
+6. **`client_token`** — API Key（x-api-key header）认证配置
+7. **`allow_local`** — SSRF 本地访问开关
+8. **`dotenvy` 依赖** — 自动加载 `.env` 文件
+9. **前端 A2A 测试页面** — `web/src/pages/A2aTest.tsx`
+10. **完整的 A2A 文档体系** — 测试报告、部署指南、配置说明等
 
 ### PR #4166 明确标注未实现，当前代码仍为未实现的
 
@@ -229,9 +327,172 @@ async fn action_stream(&self, url: &str, bearer_token: Option<&str>, message: &s
 │  │ status (tasks/get) │──────>│                          │       │
 │  │ result             │       │                          │       │
 │  └────────────────────┘       └──────────────────────────┘       │
-│  配置: +strands_agent_url, +pat_token, +location_id, +allow_local│
+│  配置: strands_agent_url, pat_token, location_id, client_token,  │
+│        allow_local (通过 .env 文件加载)                           │
 │  前端: A2aTest.tsx (discover/send/stream/status/result)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **核心差异**: 当前代码的客户端 `stream` 动作调用 `message/stream`，但目标服务端（如 Strands Agent at `120.26.206.98:8000`）支持 SSE 流式响应，因此客户端可以正确解析。而 ZeroClaw 自身的服务端尚未实现 `message/stream`。
+
+---
+
+## 五、.env 自动加载实现
+
+当前代码通过 `dotenvy` 库实现了 `.env` 文件的自动加载，无需手动导出环境变量。
+
+### 5.1 技术实现
+
+**Cargo.toml** 新增依赖：
+```toml
+# Environment variables from .env file
+dotenvy = "0.15"
+```
+
+**src/main.rs** 启动时加载：
+```rust
+async fn main() -> Result<()> {
+    // Load environment variables from .env file (if present).
+    // This allows users to configure A2A and other settings via .env.
+    if let Err(e) = dotenvy::dotenv() {
+        tracing::debug!("No .env file loaded: {}", e);
+    }
+    // ... 后续代码
+}
+```
+
+### 5.2 配置加载流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      配置加载优先级                               │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 环境变量 (最高优先级)                                         │
+│     ↓ (如未设置)                                                 │
+│  2. .env 文件 (dotenvy 加载到环境变量)                            │
+│     ↓ (如未设置)                                                 │
+│  3. config.toml 配置文件                                         │
+│     ↓ (如未设置)                                                 │
+│  4. 默认值                                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 5.3 A2A 环境变量覆盖代码
+
+**src/config/schema.rs** 中的 `apply_env_overrides` 方法：
+
+```rust
+// A2A environment variable overrides
+if let Ok(enabled) = std::env::var("A2A_ENABLED") {
+    match enabled.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => self.a2a.enabled = true,
+        "0" | "false" | "no" | "off" => self.a2a.enabled = false,
+        _ => tracing::warn!("Ignoring invalid A2A_ENABLED"),
+    }
+}
+if let Ok(agent_name) = std::env::var("A2A_AGENT_NAME") {
+    self.a2a.agent_name = Some(agent_name);
+}
+// ... 其他 A2A_* 环境变量
+if let Ok(client_token) = std::env::var("A2A_CLIENT_TOKEN") {
+    self.a2a.client_token = Some(client_token);
+}
+```
+
+### 5.4 客户端认证流程
+
+A2A 客户端工具在调用远程 Agent 时，会使用以下认证方式：
+
+```rust
+// src/tools/a2a.rs
+// 优先使用 bearer_token，否则使用 client_token
+if let Some(ref token) = self.bearer_token {
+    req = req.header("Authorization", format!("Bearer {}", token));
+} else if let Some(ref token) = self.client_token {
+    req = req.header("x-api-key", token);
+}
+```
+
+**请求示例**：
+```http
+POST /a2a HTTP/1.1
+Host: 120.26.206.98:8000
+Content-Type: application/json
+x-api-key: your-api-key-here
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "message/send",
+  "params": {
+    "message": { ... },
+    "pat_token": "c062fe5c-2a8f-4d38-a655-ab7046eb5bb3",
+    "location_id": "20273f50-0fe4-4eff-b896-8b86bfa13b00"
+  }
+}
+```
+
+---
+
+## 六、前端 A2A 测试页面
+
+### 6.1 页面功能
+
+当前 A2A 测试页面已简化，默认使用后端 A2A 工具配置：
+
+- **Local Gateway** — 固定显示，无需选择
+- **自动使用配置** — 直接使用 `.env` 中的 `strands_agent_url`、`pat_token`、`location_id`、`client_token`
+- **Action 选择** — `discover` / `send` / `stream` / `status` / `result`
+
+### 6.2 API 调用流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    前端 A2A 测试页面                              │
+├─────────────────────────────────────────────────────────────────┤
+│  用户选择 Action: discover / send / stream / status / result    │
+│                           ↓                                      │
+│  POST /api/a2a/outbound (使用 gateway pairing token)            │
+│                           ↓                                      │
+│  后端 A2A 工具 (src/tools/a2a.rs)                                │
+│    - 读取 A2aConfig 配置                                         │
+│    - 使用 strands_agent_url 作为默认 URL                         │
+│    - 注入 pat_token / location_id 到 JSON-RPC params            │
+│    - 使用 client_token 作为 x-api-key header                     │
+│                           ↓                                      │
+│  远程 Strands Agent (120.26.206.98:8000/a2a)                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 七、常见问题
+
+### Q1: 修改 .env 后配置不生效？
+
+**A**: 需要重启 Gateway：
+```bash
+pkill -f "zeroclaw gateway"
+./target/release/zeroclaw gateway start
+```
+
+### Q2: A2A 调用返回 401 Unauthorized？
+
+**A**: 检查以下配置：
+1. `A2A_CLIENT_TOKEN` 是否正确设置
+2. 远程 Agent 是否需要 `x-api-key` header
+3. `A2A_PAT_TOKEN` 和 `A2A_LOCATION_ID` 是否正确
+
+### Q3: 如何调试 A2A 请求？
+
+**A**: 查看日志：
+```bash
+RUST_LOG=debug ./target/release/zeroclaw gateway start
+```
+
+### Q4: 如何允许本地测试？
+
+**A**: 设置 `A2A_ALLOW_LOCAL=true`（仅开发环境）：
+```bash
+A2A_ALLOW_LOCAL=true
+```
