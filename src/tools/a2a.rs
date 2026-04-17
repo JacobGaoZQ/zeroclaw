@@ -528,17 +528,7 @@ impl Tool for A2aTool {
     }
 
     fn description(&self) -> &str {
-        "Communicate with remote agents via the A2A (Agent-to-Agent) protocol. \
-         \
-         Actions: \
-         - 'discover': Fetch a remote agent's capability card from /.well-known/agent-card.json. \
-         - 'send': Dispatch a task message (non-streaming, returns task object). \
-         - 'stream': Dispatch a task and receive streaming text response (RECOMMENDED for device control). \
-         - 'status': Check task progress by task_id. \
-         - 'result': Retrieve task output artifacts by task_id. \
-         \
-         IMPORTANT: For device control (TV, lights, appliances, etc.), use action='stream' with the user's natural language request. \
-         Example: User says 'turn on the TV' -> use a2a with action='stream' and message='turn on the TV'."
+        ""
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
