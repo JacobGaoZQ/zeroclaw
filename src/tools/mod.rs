@@ -993,9 +993,11 @@ pub fn all_tools_with_runtime(
     // A2A (Agent-to-Agent) outbound client tool
     if root_config.a2a.enabled {
         // Read client_token from config or environment variable
-        let client_token = root_config.a2a.client_token.clone().or_else(|| {
-            std::env::var("A2A_CLIENT_TOKEN").ok()
-        });
+        let client_token = root_config
+            .a2a
+            .client_token
+            .clone()
+            .or_else(|| std::env::var("A2A_CLIENT_TOKEN").ok());
         tool_arcs.push(Arc::new(a2a::A2aTool::with_config(
             security.clone(),
             30,

@@ -1,7 +1,13 @@
-//! # A2A Tool — MVP Implementation
+//! # A2A Tool — A2A Protocol Implementation
 //!
 //! Client-side tool for interacting with remote A2A agents.
 //! Supports: `discover`, `send` (streaming), `status`, `result` (polling).
+//!
+//! ## A2A Protocol Flow
+//! 1. **Discovery**: Fetch Agent Card from `/.well-known/agent-card.json`
+//! 2. **Parse & Cache**: Extract skills, capabilities, authentication requirements
+//! 3. **Validate**: Ensure requests conform to Agent Card definitions
+//! 4. **Execute**: Send JSON-RPC requests with proper parameters
 //!
 //! **Not yet implemented:** cancel, multi-turn conversations,
 //! structured/binary message parts.
@@ -10,8 +16,255 @@ use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Card Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Parsed Agent Card from `/.well-known/agent-card.json`
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentCard {
+    /// Human-readable name of the agent
+    #[serde(default)]
+    pub name: String,
+    /// Human-readable description
+    #[serde(default)]
+    pub description: String,
+    /// Agent version
+    #[serde(default)]
+    pub version: String,
+    /// Base URL for the agent
+    #[serde(default)]
+    pub url: String,
+    /// Agent capabilities
+    #[serde(default)]
+    pub capabilities: AgentCapabilities,
+    /// Supported input modes
+    #[serde(default, rename = "defaultInputModes")]
+    pub default_input_modes: Vec<String>,
+    /// Supported output modes
+    #[serde(default, rename = "defaultOutputModes")]
+    pub default_output_modes: Vec<String>,
+    /// Agent skills/capabilities
+    #[serde(default)]
+    pub skills: Vec<AgentSkill>,
+    /// Provider information
+    #[serde(default)]
+    pub provider: Option<AgentProvider>,
+    /// Authentication requirements
+    #[serde(default)]
+    pub authentication: AgentAuthentication,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentCapabilities {
+    #[serde(default)]
+    pub streaming: bool,
+    #[serde(default, rename = "pushNotifications")]
+    pub push_notifications: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentSkill {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentProvider {
+    #[serde(default)]
+    pub organization: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentAuthentication {
+    #[serde(default)]
+    pub schemes: Vec<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Card Cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cached Agent Card with metadata
+#[derive(Debug, Clone)]
+struct CachedAgentCard {
+    card: AgentCard,
+    fetched_at: Instant,
+    /// Pre-generated skill description for system prompt
+    skills_prompt: String,
+}
+
+/// Global cache for Agent Cards
+/// Key: base URL of the remote agent
+static AGENT_CARD_CACHE: std::sync::LazyLock<RwLock<HashMap<String, CachedAgentCard>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Default TTL for cached Agent Cards (5 minutes)
+const CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Agent Card Cache Manager
+pub struct AgentCardCache;
+
+impl AgentCardCache {
+    /// Get cached Agent Card if still valid
+    pub fn get(url: &str) -> Option<AgentCard> {
+        let cache = AGENT_CARD_CACHE.read();
+        cache.get(url).and_then(|cached| {
+            if cached.fetched_at.elapsed() < CACHE_TTL {
+                Some(cached.card.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get skills prompt for system injection
+    pub fn get_skills_prompt(url: &str) -> Option<String> {
+        let cache = AGENT_CARD_CACHE.read();
+        cache.get(url).and_then(|cached| {
+            if cached.fetched_at.elapsed() < CACHE_TTL {
+                Some(cached.skills_prompt.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Store Agent Card in cache
+    pub fn store(url: String, card: AgentCard) {
+        let skills_prompt = Self::build_skills_prompt(&card);
+        let cached = CachedAgentCard {
+            card: card.clone(),
+            fetched_at: Instant::now(),
+            skills_prompt,
+        };
+        let mut cache = AGENT_CARD_CACHE.write();
+        cache.insert(url, cached);
+    }
+
+    /// Clear expired entries from cache
+    pub fn evict_expired() {
+        let mut cache = AGENT_CARD_CACHE.write();
+        cache.retain(|_, cached| cached.fetched_at.elapsed() < CACHE_TTL);
+    }
+
+    /// Clear all cached entries
+    pub fn clear() {
+        let mut cache = AGENT_CARD_CACHE.write();
+        cache.clear();
+    }
+
+    /// Build skills prompt for system injection
+    fn build_skills_prompt(card: &AgentCard) -> String {
+        use std::fmt::Write;
+        let mut prompt = format!("### {}\n", card.name);
+        if !card.description.is_empty() {
+            let _ = writeln!(prompt, "Description: {}", card.description);
+        }
+        if !card.url.is_empty() {
+            let _ = writeln!(prompt, "URL: {}", card.url);
+        }
+
+        if !card.skills.is_empty() {
+            prompt.push_str("Skills:\n");
+            for skill in &card.skills {
+                let _ = write!(
+                    prompt,
+                    "  - {}: {}",
+                    skill.id,
+                    if skill.description.is_empty() {
+                        &skill.name
+                    } else {
+                        &skill.description
+                    }
+                );
+                if !skill.examples.is_empty() {
+                    let _ = write!(prompt, " (examples: {})", skill.examples.join(", "));
+                }
+                prompt.push('\n');
+            }
+        }
+
+        if !card.authentication.schemes.is_empty() {
+            let _ = writeln!(
+                prompt,
+                "Authentication: {}",
+                card.authentication.schemes.join(", ")
+            );
+        }
+
+        let caps: Vec<&str> = [
+            card.capabilities.streaming.then_some("streaming"),
+            card.capabilities
+                .push_notifications
+                .then_some("push-notifications"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !caps.is_empty() {
+            let _ = writeln!(prompt, "Capabilities: {}", caps.join(", "));
+        }
+
+        prompt
+    }
+
+    /// Build combined skills prompt for all known remote agents
+    pub fn build_all_skills_prompt() -> String {
+        let cache = AGENT_CARD_CACHE.read();
+        if cache.is_empty() {
+            return String::new();
+        }
+
+        let mut prompt = String::from("## Available Remote Agents (A2A)\n\n");
+        prompt.push_str("You can delegate tasks to these remote agents using the `a2a` tool.\n\n");
+
+        for cached in cache.values() {
+            if cached.fetched_at.elapsed() < CACHE_TTL {
+                prompt.push_str(&cached.skills_prompt);
+                prompt.push('\n');
+            }
+        }
+
+        prompt.push_str(
+            "To use: a2a(action=\"stream\", message=\"your request in natural language\")\n",
+        );
+        prompt
+    }
+
+    /// Validate that a skill ID exists in the Agent Card
+    pub fn validate_skill(card: &AgentCard, skill_id: &str) -> bool {
+        card.skills.iter().any(|s| s.id == skill_id)
+    }
+
+    /// Check if streaming is supported
+    pub fn supports_streaming(card: &AgentCard) -> bool {
+        card.capabilities.streaming
+    }
+
+    /// Check if bearer auth is required
+    pub fn requires_bearer_auth(card: &AgentCard) -> bool {
+        card.authentication
+            .schemes
+            .iter()
+            .any(|s| s.to_lowercase() == "bearer")
+    }
+}
 
 /// Outbound A2A client tool — discovers remote agents and sends/retrieves tasks.
 pub struct A2aTool {
@@ -114,11 +367,100 @@ impl A2aTool {
         Ok(parsed)
     }
 
+    /// Ensure Agent Card is cached, performing discovery if necessary.
+    /// Returns None if discovery fails (non-blocking for send/stream operations).
+    async fn ensure_agent_card(
+        &self,
+        url: &str,
+        bearer_token: Option<&str>,
+    ) -> anyhow::Result<Option<AgentCard>> {
+        // Check cache first
+        if let Some(card) = AgentCardCache::get(url) {
+            tracing::debug!(url = %url, "Using cached Agent Card");
+            return Ok(Some(card));
+        }
+
+        // Perform discovery
+        tracing::info!(url = %url, "Performing auto-discovery for Agent Card");
+
+        // Build discovery request
+        let base = match self.validate_url(url) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to validate URL for discovery");
+                return Ok(None);
+            }
+        };
+        let card_url = base.join("/.well-known/agent-card.json")?;
+        let client = self.build_client()?;
+
+        let mut req = client.get(card_url);
+        if let Some(token) = bearer_token {
+            req = req.header("x-api-key", token);
+        } else if let Some(ref token) = self.client_token {
+            req = req.header("x-api-key", token);
+        }
+        if let Some(ref token) = self.pat_token {
+            req = req.header("x-user-token", token);
+        }
+        if let Some(ref loc_id) = self.location_id {
+            req = req.header("x-location-id", loc_id);
+        }
+
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => match resp.text().await {
+                Ok(body) => match serde_json::from_str::<AgentCard>(&body) {
+                    Ok(card) => {
+                        AgentCardCache::store(url.to_string(), card.clone());
+                        tracing::info!(
+                            url = %url,
+                            name = %card.name,
+                            skills_count = card.skills.len(),
+                            "Agent Card auto-discovered and cached"
+                        );
+                        Ok(Some(card))
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to parse Agent Card during auto-discovery");
+                        Ok(None)
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to read Agent Card response body");
+                    Ok(None)
+                }
+            },
+            Ok(resp) => {
+                tracing::debug!(
+                    status = %resp.status(),
+                    url = %url,
+                    "Agent Card discovery returned non-success status"
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, url = %url, "Agent Card discovery request failed");
+                Ok(None)
+            }
+        }
+    }
+
     async fn action_discover(
         &self,
         url: &str,
         bearer_token: Option<&str>,
     ) -> anyhow::Result<ToolResult> {
+        // Check cache first
+        let url_key = url.trim_end_matches('/').to_string();
+        if let Some(cached_card) = AgentCardCache::get(&url_key) {
+            tracing::debug!(url = %url_key, "Agent Card cache hit");
+            return Ok(ToolResult {
+                success: true,
+                output: serde_json::to_string_pretty(&cached_card)?,
+                error: None,
+            });
+        }
+
         let base = self.validate_url(url)?;
         let card_url = base.join("/.well-known/agent-card.json")?;
         let client = self.build_client()?;
@@ -142,18 +484,40 @@ impl A2aTool {
         let status = resp.status();
         let body = resp.text().await?;
 
-        if status.is_success() {
-            Ok(ToolResult {
-                success: true,
-                output: body,
-                error: None,
-            })
-        } else {
-            Ok(ToolResult {
+        if !status.is_success() {
+            return Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("HTTP {status}: {body}")),
-            })
+            });
+        }
+
+        // Parse and cache the Agent Card
+        match serde_json::from_str::<AgentCard>(&body) {
+            Ok(card) => {
+                let url_for_cache = base.as_str().trim_end_matches('/').to_string();
+                AgentCardCache::store(url_for_cache.clone(), card.clone());
+                tracing::info!(
+                    url = %url_for_cache,
+                    name = %card.name,
+                    skills_count = card.skills.len(),
+                    "Agent Card discovered and cached"
+                );
+                Ok(ToolResult {
+                    success: true,
+                    output: serde_json::to_string_pretty(&card)?,
+                    error: None,
+                })
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to parse Agent Card JSON");
+                // Still return the raw body for LLM to examine
+                Ok(ToolResult {
+                    success: true,
+                    output: body,
+                    error: Some(format!("Warning: Failed to parse Agent Card: {e}")),
+                })
+            }
         }
     }
 
@@ -163,6 +527,20 @@ impl A2aTool {
         bearer_token: Option<&str>,
         message: &str,
     ) -> anyhow::Result<ToolResult> {
+        let url_key = url.trim_end_matches('/').to_string();
+
+        // Auto-discover if not cached
+        let card = self.ensure_agent_card(&url_key, bearer_token).await?;
+
+        // Validate capabilities
+        if let Some(ref card) = card {
+            tracing::debug!(
+                url = %url_key,
+                name = %card.name,
+                "Using cached Agent Card for send"
+            );
+        }
+
         let base = self.validate_url(url)?;
         let rpc_url = base.join("/a2a")?;
         let client = self.build_client()?;
@@ -238,6 +616,26 @@ impl A2aTool {
         bearer_token: Option<&str>,
         message: &str,
     ) -> anyhow::Result<ToolResult> {
+        let url_key = url.trim_end_matches('/').to_string();
+
+        // Auto-discover if not cached
+        let card = self.ensure_agent_card(&url_key, bearer_token).await?;
+
+        // Validate streaming capability
+        if let Some(ref card) = card {
+            if !AgentCardCache::supports_streaming(card) {
+                tracing::warn!(
+                    url = %url_key,
+                    "Remote agent does not support streaming, proceeding anyway"
+                );
+            }
+            tracing::debug!(
+                url = %url_key,
+                name = %card.name,
+                "Using cached Agent Card for stream"
+            );
+        }
+
         let base = self.validate_url(url)?;
         let rpc_url = base.join("/a2a")?;
         let client = self.build_client()?;
@@ -355,17 +753,26 @@ impl A2aTool {
                                 if let Some(tid) = result.get("taskId").and_then(|v| v.as_str()) {
                                     task_id = Some(tid.to_string());
                                 }
-                                if let Some(cid) = result.get("contextId").and_then(|v| v.as_str()) {
+                                if let Some(cid) = result.get("contextId").and_then(|v| v.as_str())
+                                {
                                     context_id = Some(cid.to_string());
                                 }
 
                                 // Extract text from artifact-update
-                                if result.get("kind").and_then(|v| v.as_str()) == Some("artifact-update") {
+                                if result.get("kind").and_then(|v| v.as_str())
+                                    == Some("artifact-update")
+                                {
                                     if let Some(artifact) = result.get("artifact") {
-                                        if let Some(parts) = artifact.get("parts").and_then(|v| v.as_array()) {
+                                        if let Some(parts) =
+                                            artifact.get("parts").and_then(|v| v.as_array())
+                                        {
                                             for part in parts {
-                                                if part.get("kind").and_then(|v| v.as_str()) == Some("text") {
-                                                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                                if part.get("kind").and_then(|v| v.as_str())
+                                                    == Some("text")
+                                                {
+                                                    if let Some(text) =
+                                                        part.get("text").and_then(|v| v.as_str())
+                                                    {
                                                         collected_text.push_str(text);
                                                     }
                                                 }
@@ -500,11 +907,18 @@ impl Tool for A2aTool {
 
     fn description(&self) -> &str {
         "Communicate with remote agents via the A2A (Agent-to-Agent) protocol. \
-         Supports five actions: 'discover' to fetch a remote agent's capability card, \
-         'send' to dispatch a task message (non-streaming, returns task object), \
-         'stream' to dispatch a task and receive streaming text response, \
-         'status' to check task progress, and \
-         'result' to retrieve task output artifacts."
+         This tool automatically discovers agent capabilities before sending requests. \
+         \
+         Actions: \
+         - 'discover': Explicitly fetch and cache a remote agent's capability card (optional - auto-discovery happens on first send/stream). \
+         - 'send': Dispatch a task message (non-streaming, returns task object). \
+         - 'stream': Dispatch a task and receive streaming text response (RECOMMENDED for device control). \
+         - 'status': Check task progress by task_id. \
+         - 'result': Retrieve task output artifacts by task_id. \
+         \
+         IMPORTANT: For device control (TV, lights, appliances, etc.), use action='stream' with the user's natural language request. \
+         The tool will automatically discover agent capabilities and validate requests. \
+         Example: User says 'turn on the TV' -> use a2a with action='stream' and message='turn on the TV'."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -514,7 +928,7 @@ impl Tool for A2aTool {
                 "action": {
                     "type": "string",
                     "enum": ["discover", "send", "stream", "status", "result"],
-                    "description": "A2A operation to perform"
+                    "description": "A2A operation to perform. Use 'stream' for device control requests (e.g., turn on TV, adjust lights)."
                 },
                 "url": {
                     "type": "string",
@@ -530,7 +944,7 @@ impl Tool for A2aTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "Message to send to the remote agent (required for send/stream actions)"
+                    "description": "Message to send to the remote agent (required for send/stream actions). For device control, pass the user's natural language request (e.g., 'turn on the TV', 'set living room lights to 50%')."
                 }
             },
             "required": ["action"]

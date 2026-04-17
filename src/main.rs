@@ -821,8 +821,14 @@ enum MemoryCommands {
 async fn main() -> Result<()> {
     // Load environment variables from .env file (if present).
     // This allows users to configure A2A and other settings via .env.
-    if let Err(e) = dotenvy::dotenv() {
-        tracing::debug!("No .env file loaded: {}", e);
+    // Note: logging is not yet initialized, so we use eprintln for early diagnostics.
+    match dotenvy::dotenv() {
+        Ok(path) => {
+            eprintln!("[zeroclaw] .env file loaded from: {}", path.display());
+        }
+        Err(_) => {
+            // .env file is optional, silently ignore if not found
+        }
     }
 
     // Install default crypto provider for Rustls TLS.

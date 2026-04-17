@@ -3773,6 +3773,15 @@ pub fn build_system_prompt_with_mode_and_autonomy(
         prompt.push_str("- NEVER narrate or describe your tool usage. Do NOT say 'Let me fetch...', 'I will use...', 'Searching...', or similar. Give the FINAL ANSWER only — no intermediate steps, no tool mentions, no progress updates.\n\n");
     } // end if !compact_context (Channel Capabilities)
 
+    // ── 8b. Remote Agents (A2A) ─────────────────────────────────
+    // Inject cached remote agent capabilities from A2A discovery
+    // This helps the LLM understand what remote agents can do
+    let a2a_skills_prompt = crate::tools::a2a::AgentCardCache::build_all_skills_prompt();
+    if !a2a_skills_prompt.is_empty() && !compact_context {
+        prompt.push_str(&a2a_skills_prompt);
+        prompt.push('\n');
+    }
+
     // ── 9. Truncation (max_system_prompt_chars budget) ──────────
     if max_system_prompt_chars > 0 && prompt.len() > max_system_prompt_chars {
         // Truncate on a char boundary, keeping the top portion (identity + safety).

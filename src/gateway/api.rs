@@ -3,13 +3,13 @@
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
 use super::AppState;
+use crate::tools::traits::Tool;
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json},
 };
 use serde::Deserialize;
-use crate::tools::traits::Tool;
 
 const MASKED_SECRET: &str = "***MASKED***";
 
@@ -1478,7 +1478,7 @@ pub async fn handle_api_a2a_outbound(
     Json(body): Json<A2aOutboundBody>,
 ) -> impl IntoResponse {
     tracing::info!("A2A outbound API called with action: {}", body.action);
-    
+
     if let Err(e) = require_auth(&state, &headers) {
         tracing::warn!("A2A outbound auth failed");
         return e.into_response();
@@ -1506,9 +1506,10 @@ pub async fn handle_api_a2a_outbound(
     ));
 
     // Read client_token from config or environment variable
-    let client_token = a2a_config.client_token.clone().or_else(|| {
-        std::env::var("A2A_CLIENT_TOKEN").ok()
-    });
+    let client_token = a2a_config
+        .client_token
+        .clone()
+        .or_else(|| std::env::var("A2A_CLIENT_TOKEN").ok());
 
     // Create A2A tool with configuration
     let tool = crate::tools::a2a::A2aTool::with_config(

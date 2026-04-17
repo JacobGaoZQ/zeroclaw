@@ -10393,7 +10393,10 @@ impl Config {
         }
         if let Ok(capabilities) = std::env::var("A2A_CAPABILITIES") {
             if !capabilities.is_empty() {
-                self.a2a.capabilities = capabilities.split(',').map(|s| s.trim().to_string()).collect();
+                self.a2a.capabilities = capabilities
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
             }
         }
         if let Ok(notify_chat_id) = std::env::var("A2A_NOTIFY_CHAT_ID") {
