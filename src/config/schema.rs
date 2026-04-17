@@ -3778,10 +3778,6 @@ pub struct A2aConfig {
     /// When set, inbound A2A task results are also posted to this chat.
     #[serde(default)]
     pub notify_chat_id: Option<i64>,
-    /// Allow outbound A2A requests to localhost/private IPs.
-    /// Enable only in development for same-host multi-agent testing.
-    #[serde(default)]
-    pub allow_local: bool,
     /// Default remote Strands Agent URL for A2A communication.
     /// When set, the `a2a` tool can use this as the default target URL.
     #[serde(default)]
@@ -3809,7 +3805,6 @@ impl std::fmt::Debug for A2aConfig {
             .field("version", &self.version)
             .field("capabilities", &self.capabilities)
             .field("notify_chat_id", &self.notify_chat_id)
-            .field("allow_local", &self.allow_local)
             .field("strands_agent_url", &self.strands_agent_url)
             .field("pat_token", &self.pat_token.as_ref().map(|_| "***"))
             .field("location_id", &self.location_id)
@@ -10402,17 +10397,6 @@ impl Config {
         if let Ok(notify_chat_id) = std::env::var("A2A_NOTIFY_CHAT_ID") {
             if let Ok(chat_id) = notify_chat_id.parse::<i64>() {
                 self.a2a.notify_chat_id = Some(chat_id);
-            }
-        }
-        if let Ok(allow_local) = std::env::var("A2A_ALLOW_LOCAL") {
-            if !allow_local.trim().is_empty() {
-                match allow_local.trim().to_ascii_lowercase().as_str() {
-                    "1" | "true" | "yes" | "on" => self.a2a.allow_local = true,
-                    "0" | "false" | "no" | "off" => self.a2a.allow_local = false,
-                    _ => tracing::warn!(
-                        "Ignoring invalid A2A_ALLOW_LOCAL (valid: 1|0|true|false|yes|no|on|off)"
-                    ),
-                }
             }
         }
         if let Ok(strands_agent_url) = std::env::var("A2A_STRANDS_AGENT_URL") {

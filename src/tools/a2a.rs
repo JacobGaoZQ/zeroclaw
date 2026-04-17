@@ -5,9 +5,7 @@
 //!
 //! ## A2A Protocol Flow
 //! 1. **Discovery**: Fetch Agent Card from `/.well-known/agent-card.json`
-//! 2. **Parse & Cache**: Extract skills, capabilities, authentication requirements
-//! 3. **Validate**: Ensure requests conform to Agent Card definitions
-//! 4. **Execute**: Send JSON-RPC requests with proper parameters
+//! 2. **Execute**: Send JSON-RPC requests with proper parameters
 //!
 //! **Not yet implemented:** cancel, multi-turn conversations,
 //! structured/binary message parts.
@@ -16,262 +14,13 @@ use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Agent Card Types
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Parsed Agent Card from `/.well-known/agent-card.json`
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AgentCard {
-    /// Human-readable name of the agent
-    #[serde(default)]
-    pub name: String,
-    /// Human-readable description
-    #[serde(default)]
-    pub description: String,
-    /// Agent version
-    #[serde(default)]
-    pub version: String,
-    /// Base URL for the agent
-    #[serde(default)]
-    pub url: String,
-    /// Agent capabilities
-    #[serde(default)]
-    pub capabilities: AgentCapabilities,
-    /// Supported input modes
-    #[serde(default, rename = "defaultInputModes")]
-    pub default_input_modes: Vec<String>,
-    /// Supported output modes
-    #[serde(default, rename = "defaultOutputModes")]
-    pub default_output_modes: Vec<String>,
-    /// Agent skills/capabilities
-    #[serde(default)]
-    pub skills: Vec<AgentSkill>,
-    /// Provider information
-    #[serde(default)]
-    pub provider: Option<AgentProvider>,
-    /// Authentication requirements
-    #[serde(default)]
-    pub authentication: AgentAuthentication,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AgentCapabilities {
-    #[serde(default)]
-    pub streaming: bool,
-    #[serde(default, rename = "pushNotifications")]
-    pub push_notifications: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AgentSkill {
-    #[serde(default)]
-    pub id: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub examples: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AgentProvider {
-    #[serde(default)]
-    pub organization: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AgentAuthentication {
-    #[serde(default)]
-    pub schemes: Vec<String>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Agent Card Cache
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Cached Agent Card with metadata
-#[derive(Debug, Clone)]
-struct CachedAgentCard {
-    card: AgentCard,
-    fetched_at: Instant,
-    /// Pre-generated skill description for system prompt
-    skills_prompt: String,
-}
-
-/// Global cache for Agent Cards
-/// Key: base URL of the remote agent
-static AGENT_CARD_CACHE: std::sync::LazyLock<RwLock<HashMap<String, CachedAgentCard>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// Default TTL for cached Agent Cards (5 minutes)
-const CACHE_TTL: Duration = Duration::from_secs(300);
-
-/// Agent Card Cache Manager
-pub struct AgentCardCache;
-
-impl AgentCardCache {
-    /// Get cached Agent Card if still valid
-    pub fn get(url: &str) -> Option<AgentCard> {
-        let cache = AGENT_CARD_CACHE.read();
-        cache.get(url).and_then(|cached| {
-            if cached.fetched_at.elapsed() < CACHE_TTL {
-                Some(cached.card.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Get skills prompt for system injection
-    pub fn get_skills_prompt(url: &str) -> Option<String> {
-        let cache = AGENT_CARD_CACHE.read();
-        cache.get(url).and_then(|cached| {
-            if cached.fetched_at.elapsed() < CACHE_TTL {
-                Some(cached.skills_prompt.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Store Agent Card in cache
-    pub fn store(url: String, card: AgentCard) {
-        let skills_prompt = Self::build_skills_prompt(&card);
-        let cached = CachedAgentCard {
-            card: card.clone(),
-            fetched_at: Instant::now(),
-            skills_prompt,
-        };
-        let mut cache = AGENT_CARD_CACHE.write();
-        cache.insert(url, cached);
-    }
-
-    /// Clear expired entries from cache
-    pub fn evict_expired() {
-        let mut cache = AGENT_CARD_CACHE.write();
-        cache.retain(|_, cached| cached.fetched_at.elapsed() < CACHE_TTL);
-    }
-
-    /// Clear all cached entries
-    pub fn clear() {
-        let mut cache = AGENT_CARD_CACHE.write();
-        cache.clear();
-    }
-
-    /// Build skills prompt for system injection
-    fn build_skills_prompt(card: &AgentCard) -> String {
-        use std::fmt::Write;
-        let mut prompt = format!("### {}\n", card.name);
-        if !card.description.is_empty() {
-            let _ = writeln!(prompt, "Description: {}", card.description);
-        }
-        if !card.url.is_empty() {
-            let _ = writeln!(prompt, "URL: {}", card.url);
-        }
-
-        if !card.skills.is_empty() {
-            prompt.push_str("Skills:\n");
-            for skill in &card.skills {
-                let _ = write!(
-                    prompt,
-                    "  - {}: {}",
-                    skill.id,
-                    if skill.description.is_empty() {
-                        &skill.name
-                    } else {
-                        &skill.description
-                    }
-                );
-                if !skill.examples.is_empty() {
-                    let _ = write!(prompt, " (examples: {})", skill.examples.join(", "));
-                }
-                prompt.push('\n');
-            }
-        }
-
-        if !card.authentication.schemes.is_empty() {
-            let _ = writeln!(
-                prompt,
-                "Authentication: {}",
-                card.authentication.schemes.join(", ")
-            );
-        }
-
-        let caps: Vec<&str> = [
-            card.capabilities.streaming.then_some("streaming"),
-            card.capabilities
-                .push_notifications
-                .then_some("push-notifications"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        if !caps.is_empty() {
-            let _ = writeln!(prompt, "Capabilities: {}", caps.join(", "));
-        }
-
-        prompt
-    }
-
-    /// Build combined skills prompt for all known remote agents
-    pub fn build_all_skills_prompt() -> String {
-        let cache = AGENT_CARD_CACHE.read();
-        if cache.is_empty() {
-            return String::new();
-        }
-
-        let mut prompt = String::from("## Available Remote Agents (A2A)\n\n");
-        prompt.push_str("You can delegate tasks to these remote agents using the `a2a` tool.\n\n");
-
-        for cached in cache.values() {
-            if cached.fetched_at.elapsed() < CACHE_TTL {
-                prompt.push_str(&cached.skills_prompt);
-                prompt.push('\n');
-            }
-        }
-
-        prompt.push_str(
-            "To use: a2a(action=\"stream\", message=\"your request in natural language\")\n",
-        );
-        prompt
-    }
-
-    /// Validate that a skill ID exists in the Agent Card
-    pub fn validate_skill(card: &AgentCard, skill_id: &str) -> bool {
-        card.skills.iter().any(|s| s.id == skill_id)
-    }
-
-    /// Check if streaming is supported
-    pub fn supports_streaming(card: &AgentCard) -> bool {
-        card.capabilities.streaming
-    }
-
-    /// Check if bearer auth is required
-    pub fn requires_bearer_auth(card: &AgentCard) -> bool {
-        card.authentication
-            .schemes
-            .iter()
-            .any(|s| s.to_lowercase() == "bearer")
-    }
-}
 
 /// Outbound A2A client tool — discovers remote agents and sends/retrieves tasks.
 pub struct A2aTool {
     security: Arc<SecurityPolicy>,
     timeout_secs: u64,
-    /// When true, allow requests to localhost/private IPs (same-host A2A).
-    allow_local: bool,
     /// Default remote agent URL (from config).
     default_url: Option<String>,
     /// PAT token to include in JSON-RPC params.
@@ -283,11 +32,10 @@ pub struct A2aTool {
 }
 
 impl A2aTool {
-    pub fn new(security: Arc<SecurityPolicy>, timeout_secs: u64, allow_local: bool) -> Self {
+    pub fn new(security: Arc<SecurityPolicy>, timeout_secs: u64) -> Self {
         Self {
             security,
             timeout_secs,
-            allow_local,
             default_url: None,
             pat_token: None,
             location_id: None,
@@ -299,7 +47,6 @@ impl A2aTool {
     pub fn with_config(
         security: Arc<SecurityPolicy>,
         timeout_secs: u64,
-        allow_local: bool,
         default_url: Option<String>,
         pat_token: Option<String>,
         location_id: Option<String>,
@@ -308,7 +55,6 @@ impl A2aTool {
         Self {
             security,
             timeout_secs,
-            allow_local,
             default_url,
             pat_token,
             location_id,
@@ -354,95 +100,16 @@ impl A2aTool {
             "http" | "https" => {}
             scheme => anyhow::bail!("Unsupported URL scheme: {scheme} (only http/https allowed)"),
         }
-        if !self.allow_local {
-            if let Some(host) = parsed.host_str() {
-                if is_private_or_local_host(host) {
-                    anyhow::bail!(
-                        "Blocked request to private/local host: {host} (A2A only allows public hosts)"
-                    );
-                }
-                validate_resolved_host_is_public(host)?;
+        // SSRF protection: block private/local hosts
+        if let Some(host) = parsed.host_str() {
+            if is_private_or_local_host(host) {
+                anyhow::bail!(
+                    "Blocked request to private/local host: {host} (A2A only allows public hosts)"
+                );
             }
+            validate_resolved_host_is_public(host)?;
         }
         Ok(parsed)
-    }
-
-    /// Ensure Agent Card is cached, performing discovery if necessary.
-    /// Returns None if discovery fails (non-blocking for send/stream operations).
-    async fn ensure_agent_card(
-        &self,
-        url: &str,
-        bearer_token: Option<&str>,
-    ) -> anyhow::Result<Option<AgentCard>> {
-        // Check cache first
-        if let Some(card) = AgentCardCache::get(url) {
-            tracing::debug!(url = %url, "Using cached Agent Card");
-            return Ok(Some(card));
-        }
-
-        // Perform discovery
-        tracing::info!(url = %url, "Performing auto-discovery for Agent Card");
-
-        // Build discovery request
-        let base = match self.validate_url(url) {
-            Ok(u) => u,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to validate URL for discovery");
-                return Ok(None);
-            }
-        };
-        let card_url = base.join("/.well-known/agent-card.json")?;
-        let client = self.build_client()?;
-
-        let mut req = client.get(card_url);
-        if let Some(token) = bearer_token {
-            req = req.header("x-api-key", token);
-        } else if let Some(ref token) = self.client_token {
-            req = req.header("x-api-key", token);
-        }
-        if let Some(ref token) = self.pat_token {
-            req = req.header("x-user-token", token);
-        }
-        if let Some(ref loc_id) = self.location_id {
-            req = req.header("x-location-id", loc_id);
-        }
-
-        match req.send().await {
-            Ok(resp) if resp.status().is_success() => match resp.text().await {
-                Ok(body) => match serde_json::from_str::<AgentCard>(&body) {
-                    Ok(card) => {
-                        AgentCardCache::store(url.to_string(), card.clone());
-                        tracing::info!(
-                            url = %url,
-                            name = %card.name,
-                            skills_count = card.skills.len(),
-                            "Agent Card auto-discovered and cached"
-                        );
-                        Ok(Some(card))
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to parse Agent Card during auto-discovery");
-                        Ok(None)
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to read Agent Card response body");
-                    Ok(None)
-                }
-            },
-            Ok(resp) => {
-                tracing::debug!(
-                    status = %resp.status(),
-                    url = %url,
-                    "Agent Card discovery returned non-success status"
-                );
-                Ok(None)
-            }
-            Err(e) => {
-                tracing::debug!(error = %e, url = %url, "Agent Card discovery request failed");
-                Ok(None)
-            }
-        }
     }
 
     async fn action_discover(
@@ -450,17 +117,6 @@ impl A2aTool {
         url: &str,
         bearer_token: Option<&str>,
     ) -> anyhow::Result<ToolResult> {
-        // Check cache first
-        let url_key = url.trim_end_matches('/').to_string();
-        if let Some(cached_card) = AgentCardCache::get(&url_key) {
-            tracing::debug!(url = %url_key, "Agent Card cache hit");
-            return Ok(ToolResult {
-                success: true,
-                output: serde_json::to_string_pretty(&cached_card)?,
-                error: None,
-            });
-        }
-
         let base = self.validate_url(url)?;
         let card_url = base.join("/.well-known/agent-card.json")?;
         let client = self.build_client()?;
@@ -492,16 +148,16 @@ impl A2aTool {
             });
         }
 
-        // Parse and cache the Agent Card
-        match serde_json::from_str::<AgentCard>(&body) {
+        // Parse the Agent Card
+        match serde_json::from_str::<serde_json::Value>(&body) {
             Ok(card) => {
-                let url_for_cache = base.as_str().trim_end_matches('/').to_string();
-                AgentCardCache::store(url_for_cache.clone(), card.clone());
+                let name = card.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let skills = card.get("skills").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0);
                 tracing::info!(
-                    url = %url_for_cache,
-                    name = %card.name,
-                    skills_count = card.skills.len(),
-                    "Agent Card discovered and cached"
+                    url = %base.as_str().trim_end_matches('/'),
+                    name = %name,
+                    skills_count = skills,
+                    "Agent Card discovered"
                 );
                 Ok(ToolResult {
                     success: true,
@@ -527,20 +183,6 @@ impl A2aTool {
         bearer_token: Option<&str>,
         message: &str,
     ) -> anyhow::Result<ToolResult> {
-        let url_key = url.trim_end_matches('/').to_string();
-
-        // Auto-discover if not cached
-        let card = self.ensure_agent_card(&url_key, bearer_token).await?;
-
-        // Validate capabilities
-        if let Some(ref card) = card {
-            tracing::debug!(
-                url = %url_key,
-                name = %card.name,
-                "Using cached Agent Card for send"
-            );
-        }
-
         let base = self.validate_url(url)?;
         let rpc_url = base.join("/a2a")?;
         let client = self.build_client()?;
@@ -616,26 +258,6 @@ impl A2aTool {
         bearer_token: Option<&str>,
         message: &str,
     ) -> anyhow::Result<ToolResult> {
-        let url_key = url.trim_end_matches('/').to_string();
-
-        // Auto-discover if not cached
-        let card = self.ensure_agent_card(&url_key, bearer_token).await?;
-
-        // Validate streaming capability
-        if let Some(ref card) = card {
-            if !AgentCardCache::supports_streaming(card) {
-                tracing::warn!(
-                    url = %url_key,
-                    "Remote agent does not support streaming, proceeding anyway"
-                );
-            }
-            tracing::debug!(
-                url = %url_key,
-                name = %card.name,
-                "Using cached Agent Card for stream"
-            );
-        }
-
         let base = self.validate_url(url)?;
         let rpc_url = base.join("/a2a")?;
         let client = self.build_client()?;
@@ -907,17 +529,15 @@ impl Tool for A2aTool {
 
     fn description(&self) -> &str {
         "Communicate with remote agents via the A2A (Agent-to-Agent) protocol. \
-         This tool automatically discovers agent capabilities before sending requests. \
          \
          Actions: \
-         - 'discover': Explicitly fetch and cache a remote agent's capability card (optional - auto-discovery happens on first send/stream). \
+         - 'discover': Fetch a remote agent's capability card from /.well-known/agent-card.json. \
          - 'send': Dispatch a task message (non-streaming, returns task object). \
          - 'stream': Dispatch a task and receive streaming text response (RECOMMENDED for device control). \
          - 'status': Check task progress by task_id. \
          - 'result': Retrieve task output artifacts by task_id. \
          \
          IMPORTANT: For device control (TV, lights, appliances, etc.), use action='stream' with the user's natural language request. \
-         The tool will automatically discover agent capabilities and validate requests. \
          Example: User says 'turn on the TV' -> use a2a with action='stream' and message='turn on the TV'."
     }
 
@@ -1159,7 +779,7 @@ mod tests {
 
     fn test_tool() -> A2aTool {
         let security = Arc::new(SecurityPolicy::default());
-        A2aTool::new(security, 30, false)
+        A2aTool::new(security, 30)
     }
 
     #[test]
@@ -1206,14 +826,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_url_allows_local_when_enabled() {
-        let security = Arc::new(SecurityPolicy::default());
-        let tool = A2aTool::new(security, 30, true);
-        assert!(tool.validate_url("http://127.0.0.1:42618").is_ok());
-        assert!(tool.validate_url("http://localhost:42618").is_ok());
-    }
-
-    #[test]
     fn ssrf_helpers_block_cloud_metadata() {
         assert!(is_private_or_local_host("169.254.169.254"));
         assert!(is_private_or_local_host("127.0.0.1"));
@@ -1222,51 +834,6 @@ mod tests {
         assert!(is_private_or_local_host("foo.localhost"));
         assert!(!is_private_or_local_host("8.8.8.8"));
         assert!(!is_private_or_local_host("example.com"));
-    }
-
-    #[tokio::test]
-    async fn missing_url_returns_error_when_no_default() {
-        // Tool without default URL should error when url is not provided
-        let tool = test_tool();
-        let result = tool.execute(json!({"action": "discover"})).await.unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_deref().unwrap().contains("url"));
-    }
-
-    #[tokio::test]
-    async fn uses_default_url_when_configured() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        // Use mock server to avoid real network requests
-        let server = MockServer::start().await;
-        let card = json!({
-            "name": "Test Agent",
-            "version": "1.0",
-            "skills": []
-        });
-
-        Mock::given(method("GET"))
-            .and(path("/.well-known/agent-card.json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&card))
-            .mount(&server)
-            .await;
-
-        // Tool with default URL should use it when url arg is omitted
-        let security = Arc::new(SecurityPolicy::default());
-        let tool = A2aTool::with_config(
-            security,
-            5,
-            true, // allow_local for localhost mock server
-            Some(server.uri()),
-            None,
-            None,
-            None,
-        );
-        // Should not error about missing URL
-        let result = tool.execute(json!({"action": "discover"})).await.unwrap();
-        // Should succeed (mock server returns valid card)
-        assert!(result.success);
     }
 
     #[tokio::test]
@@ -1312,7 +879,7 @@ mod tests {
     /// Build a tool with a short timeout suitable for mock-server tests.
     fn mock_tool() -> A2aTool {
         let security = Arc::new(SecurityPolicy::default());
-        A2aTool::new(security, 5, false)
+        A2aTool::new(security, 5)
     }
 
     /// Directly call the discover action, bypassing SSRF validation
@@ -1547,7 +1114,7 @@ mod tests {
             workspace_dir: std::env::temp_dir(),
             ..SecurityPolicy::default()
         });
-        let tool = A2aTool::new(security, 5, false);
+        let tool = A2aTool::new(security, 5);
         let result = tool
             .execute(json!({"action": "discover", "url": "http://example.com"}))
             .await
@@ -1556,53 +1123,5 @@ mod tests {
         assert!(result.error.as_deref().unwrap().contains("read-only"));
     }
 
-    #[tokio::test]
-    async fn send_includes_pat_token_and_location_id() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        let server = MockServer::start().await;
-
-        let rpc_response = json!({
-            "jsonrpc": "2.0",
-            "id": "test-id",
-            "result": {
-                "id": "task-1",
-                "status": {"state": "completed"}
-            }
-        });
-
-        // Accept any POST to /a2a
-        Mock::given(method("POST"))
-            .and(path("/a2a"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&rpc_response))
-            .mount(&server)
-            .await;
-
-        // Create tool with pat_token and location_id configured
-        let security = Arc::new(SecurityPolicy::default());
-        let tool = A2aTool::with_config(
-            security,
-            5,
-            true, // allow_local for localhost mock server
-            Some(server.uri()),
-            Some("my-pat-token".to_string()),
-            Some("location-123".to_string()),
-            None,
-        );
-
-        let result = tool
-            .execute(json!({"action": "send", "message": "hello"}))
-            .await
-            .unwrap();
-        assert!(result.success);
-
-        // Verify the request body contained pat_token and location_id
-        // by checking the server received the correct request
-        let requests = server.received_requests().await.unwrap();
-        assert!(!requests.is_empty());
-        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-        assert_eq!(body["params"]["pat_token"], "my-pat-token");
-        assert_eq!(body["params"]["location_id"], "location-123");
-    }
 }

@@ -1001,7 +1001,6 @@ pub fn all_tools_with_runtime(
         tool_arcs.push(Arc::new(a2a::A2aTool::with_config(
             security.clone(),
             30,
-            root_config.a2a.allow_local,
             root_config.a2a.strands_agent_url.clone(),
             root_config.a2a.pat_token.clone(),
             root_config.a2a.location_id.clone(),
