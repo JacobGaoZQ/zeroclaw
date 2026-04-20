@@ -12,8 +12,6 @@ Add the following to your `~/.zeroclaw/config.toml`:
 [a2a]
 enabled = true
 strands_agent_url = "http://<remote-agent-host>:<port>/a2a"
-pat_token = "<your-pat-token>"
-location_id = "<your-location-id>"
 client_token = "<your-a2a-api-key>"
 ```
 
@@ -24,8 +22,6 @@ Add the following to your `.env` file or export as environment variables:
 ```bash
 A2A_ENABLED=true
 A2A_STRANDS_AGENT_URL=http://<remote-agent-host>:<port>/a2a (Test the value of the notes in the document: http://120.26.206.98:8000/a2a)
-A2A_PAT_TOKEN=<your-pat-token>
-A2A_LOCATION_ID=<your-location-id>
 A2A_CLIENT_TOKEN=<your-a2a-api-key> (Test the value of the notes in the document: your-a2a-api-key-here)
 ```
 
@@ -37,9 +33,11 @@ A2A_CLIENT_TOKEN=<your-a2a-api-key> (Test the value of the notes in the document
 |---|---|---|---|
 | Enable | `enabled` | `A2A_ENABLED` | Must be `true` to enable the A2A tool |
 | Agent URL | `strands_agent_url` | `A2A_STRANDS_AGENT_URL` | URL of the remote agent that handles device control |
-| PAT Token | `pat_token` | `A2A_PAT_TOKEN` | Personal access token for the remote agent |
-| Location ID | `location_id` | `A2A_LOCATION_ID` | Location identifier for the target device group |
 | Client Token | `client_token` | `A2A_CLIENT_TOKEN` | API key for authenticating A2A requests |
+
+### Per-Call Parameters
+
+The `pat_token` is passed as a parameter when the agent calls the `a2a` tool, not from config. This allows different tokens to be used per invocation.
 
 ## Example Skill
 

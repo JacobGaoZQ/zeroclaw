@@ -1002,8 +1002,6 @@ pub fn all_tools_with_runtime(
             security.clone(),
             30,
             root_config.a2a.strands_agent_url.clone(),
-            root_config.a2a.pat_token.clone(),
-            root_config.a2a.location_id.clone(),
             client_token,
         )));
     }

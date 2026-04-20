@@ -3782,12 +3782,6 @@ pub struct A2aConfig {
     /// When set, the `a2a` tool can use this as the default target URL.
     #[serde(default)]
     pub strands_agent_url: Option<String>,
-    /// PAT token to include in A2A JSON-RPC params when calling Strands Agent.
-    #[serde(default)]
-    pub pat_token: Option<String>,
-    /// Location ID to include in A2A JSON-RPC params when calling Strands Agent.
-    #[serde(default)]
-    pub location_id: Option<String>,
     /// API key (x-api-key header) for ZeroClaw to authenticate when calling Strands Agent.
     /// Can also be set via A2A_CLIENT_TOKEN environment variable.
     #[serde(default)]
@@ -3806,8 +3800,6 @@ impl std::fmt::Debug for A2aConfig {
             .field("capabilities", &self.capabilities)
             .field("notify_chat_id", &self.notify_chat_id)
             .field("strands_agent_url", &self.strands_agent_url)
-            .field("pat_token", &self.pat_token.as_ref().map(|_| "***"))
-            .field("location_id", &self.location_id)
             .field("client_token", &self.client_token.as_ref().map(|_| "***"))
             .finish()
     }
@@ -10402,16 +10394,6 @@ impl Config {
         if let Ok(strands_agent_url) = std::env::var("A2A_STRANDS_AGENT_URL") {
             if !strands_agent_url.is_empty() {
                 self.a2a.strands_agent_url = Some(strands_agent_url);
-            }
-        }
-        if let Ok(pat_token) = std::env::var("A2A_PAT_TOKEN") {
-            if !pat_token.is_empty() {
-                self.a2a.pat_token = Some(pat_token);
-            }
-        }
-        if let Ok(location_id) = std::env::var("A2A_LOCATION_ID") {
-            if !location_id.is_empty() {
-                self.a2a.location_id = Some(location_id);
             }
         }
         if let Ok(client_token) = std::env::var("A2A_CLIENT_TOKEN") {

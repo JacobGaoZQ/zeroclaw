@@ -23,10 +23,6 @@ pub struct A2aTool {
     timeout_secs: u64,
     /// Default remote agent URL (from config).
     default_url: Option<String>,
-    /// PAT token to include in JSON-RPC params.
-    pat_token: Option<String>,
-    /// Location ID to include in JSON-RPC params.
-    location_id: Option<String>,
     /// API key (x-api-key header) for authenticating when calling Strands Agent.
     client_token: Option<String>,
 }
@@ -37,8 +33,6 @@ impl A2aTool {
             security,
             timeout_secs,
             default_url: None,
-            pat_token: None,
-            location_id: None,
             client_token: None,
         }
     }
@@ -48,16 +42,12 @@ impl A2aTool {
         security: Arc<SecurityPolicy>,
         timeout_secs: u64,
         default_url: Option<String>,
-        pat_token: Option<String>,
-        location_id: Option<String>,
         client_token: Option<String>,
     ) -> Self {
         Self {
             security,
             timeout_secs,
             default_url,
-            pat_token,
-            location_id,
             client_token,
         }
     }
@@ -116,6 +106,7 @@ impl A2aTool {
         &self,
         url: &str,
         bearer_token: Option<&str>,
+        pat_token: Option<&str>,
     ) -> anyhow::Result<ToolResult> {
         let base = self.validate_url(url)?;
         let card_url = base.join("/.well-known/agent-card.json")?;
@@ -129,11 +120,8 @@ impl A2aTool {
         } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
-        if let Some(ref token) = self.pat_token {
+        if let Some(token) = pat_token {
             req = req.header("x-user-token", token);
-        }
-        if let Some(ref loc_id) = self.location_id {
-            req = req.header("x-location-id", loc_id);
         }
 
         let resp = req.send().await?;
@@ -182,6 +170,7 @@ impl A2aTool {
         url: &str,
         bearer_token: Option<&str>,
         message: &str,
+        pat_token: Option<&str>,
     ) -> anyhow::Result<ToolResult> {
         let base = self.validate_url(url)?;
         let rpc_url = base.join("/a2a")?;
@@ -189,7 +178,7 @@ impl A2aTool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let message_id = uuid::Uuid::new_v4().to_string();
 
-        // Build params with optional pat_token and location_id
+        // Build params
         let mut params = json!({
             "message": {
                 "role": "user",
@@ -198,15 +187,10 @@ impl A2aTool {
             }
         });
 
-        // Add pat_token and location_id from tool config if present
-        if let Some(ref token) = self.pat_token {
+        // Add pat_token to JSON-RPC params if provided
+        if let Some(token) = pat_token {
             if let Some(obj) = params.as_object_mut() {
                 obj.insert("pat_token".to_string(), json!(token));
-            }
-        }
-        if let Some(ref loc_id) = self.location_id {
-            if let Some(obj) = params.as_object_mut() {
-                obj.insert("location_id".to_string(), json!(loc_id));
             }
         }
 
@@ -226,11 +210,8 @@ impl A2aTool {
         } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
-        if let Some(ref token) = self.pat_token {
+        if let Some(token) = pat_token {
             req = req.header("x-user-token", token);
-        }
-        if let Some(ref loc_id) = self.location_id {
-            req = req.header("x-location-id", loc_id);
         }
 
         let resp = req.send().await?;
@@ -257,6 +238,7 @@ impl A2aTool {
         url: &str,
         bearer_token: Option<&str>,
         message: &str,
+        pat_token: Option<&str>,
     ) -> anyhow::Result<ToolResult> {
         let base = self.validate_url(url)?;
         let rpc_url = base.join("/a2a")?;
@@ -264,7 +246,7 @@ impl A2aTool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let message_id = uuid::Uuid::new_v4().to_string();
 
-        // Build params with optional pat_token and location_id
+        // Build params
         let mut params = json!({
             "message": {
                 "role": "user",
@@ -276,15 +258,10 @@ impl A2aTool {
             }
         });
 
-        // Add pat_token and location_id from tool config if present
-        if let Some(ref token) = self.pat_token {
+        // Add pat_token to JSON-RPC params if provided
+        if let Some(token) = pat_token {
             if let Some(obj) = params.as_object_mut() {
                 obj.insert("pat_token".to_string(), json!(token));
-            }
-        }
-        if let Some(ref loc_id) = self.location_id {
-            if let Some(obj) = params.as_object_mut() {
-                obj.insert("location_id".to_string(), json!(loc_id));
             }
         }
 
@@ -304,11 +281,8 @@ impl A2aTool {
         } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
-        if let Some(ref token) = self.pat_token {
+        if let Some(token) = pat_token {
             req = req.header("x-user-token", token);
-        }
-        if let Some(ref loc_id) = self.location_id {
-            req = req.header("x-location-id", loc_id);
         }
 
         let resp = req.send().await?;
@@ -453,12 +427,6 @@ impl A2aTool {
         } else if let Some(ref token) = self.client_token {
             req = req.header("x-api-key", token);
         }
-        if let Some(ref token) = self.pat_token {
-            req = req.header("x-user-token", token);
-        }
-        if let Some(ref loc_id) = self.location_id {
-            req = req.header("x-location-id", loc_id);
-        }
 
         let resp = req.send().await?;
         let status = resp.status();
@@ -548,6 +516,10 @@ impl Tool for A2aTool {
                     "type": "string",
                     "description": "Bearer token for authentication with the remote agent"
                 },
+                "pat_token": {
+                    "type": "string",
+                    "description": "PAT token to include in A2A JSON-RPC params and x-user-token header when calling Strands Agent"
+                },
                 "task_id": {
                     "type": "string",
                     "description": "Task ID (required for status/result actions)"
@@ -588,6 +560,10 @@ impl Tool for A2aTool {
             .get("bearer_token")
             .and_then(|v| v.as_str())
             .map(String::from);
+        let pat_token = args
+            .get("pat_token")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let task_id = args
             .get("task_id")
             .and_then(|v| v.as_str())
@@ -613,7 +589,7 @@ impl Tool for A2aTool {
         };
 
         match action.as_str() {
-            "discover" => self.action_discover(&url, bearer_token.as_deref()).await,
+            "discover" => self.action_discover(&url, bearer_token.as_deref(), pat_token.as_deref()).await,
             "send" => {
                 if message.is_empty() {
                     return Ok(ToolResult {
@@ -622,7 +598,7 @@ impl Tool for A2aTool {
                         error: Some("Missing required parameter: message".into()),
                     });
                 }
-                self.action_send(&url, bearer_token.as_deref(), &message)
+                self.action_send(&url, bearer_token.as_deref(), &message, pat_token.as_deref())
                     .await
             }
             "stream" => {
@@ -633,7 +609,7 @@ impl Tool for A2aTool {
                         error: Some("Missing required parameter: message".into()),
                     });
                 }
-                self.action_stream(&url, bearer_token.as_deref(), &message)
+                self.action_stream(&url, bearer_token.as_deref(), &message, pat_token.as_deref())
                     .await
             }
             "status" => {
