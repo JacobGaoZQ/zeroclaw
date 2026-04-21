@@ -604,6 +604,7 @@ mod tests {
             a2a_agent_card: Some(Arc::new(card)),
             a2a_task_store: Some(Arc::new(TaskStore::new())),
             auth_limiter: Arc::new(crate::gateway::auth_rate_limit::AuthRateLimiter::new()),
+            session_queue: Arc::new(crate::gateway::session_queue::SessionActorQueue::new(8, 30, 600)),
         }
     }
 

@@ -418,6 +418,7 @@ async fn process_chat_message(
     // Drive both futures concurrently: the agent turn produces events
     // and we relay them over WebSocket.
     let forward_fut = async {
+        let mut recent_tool_call: Option<(String, std::time::Instant)> = None;
         while let Some(event) = event_rx.recv().await {
             let ws_msg = match event {
                 TurnEvent::Chunk { delta } => {
@@ -427,7 +428,32 @@ async fn process_chat_message(
                     serde_json::json!({ "type": "thinking", "content": delta })
                 }
                 TurnEvent::ToolCall { name, args } => {
-                    serde_json::json!({ "type": "tool_call", "name": name, "args": args })
+                    // Dedup: skip identical a2a tool calls within 30s window
+                    let mut is_duplicate = false;
+                    if name == "a2a" {
+                        let sig = format!("{}|{}", name, args);
+                        let now = std::time::Instant::now();
+                        if let Some((prev_sig, prev_time)) = recent_tool_call.as_ref() {
+                            if *prev_sig == sig && now.duration_since(*prev_time).as_secs() < 30 {
+                                is_duplicate = true;
+                            }
+                        }
+                        recent_tool_call = Some((sig, std::time::Instant::now()));
+                    }
+                    if is_duplicate {
+                        continue;
+                    }
+                    // Redact sensitive fields before sending to clients
+                    let mut args_val = args;
+                    if let Some(obj) = args_val.as_object_mut() {
+                        if obj.contains_key("pat_token") {
+                            obj.insert("pat_token".into(), serde_json::Value::String("***".into()));
+                        }
+                        if obj.contains_key("bearer_token") {
+                            obj.insert("bearer_token".into(), serde_json::Value::String("***".into()));
+                        }
+                    }
+                    serde_json::json!({ "type": "tool_call", "name": name, "args": args_val })
                 }
                 TurnEvent::ToolResult { name, output } => {
                     serde_json::json!({ "type": "tool_result", "name": name, "output": output })

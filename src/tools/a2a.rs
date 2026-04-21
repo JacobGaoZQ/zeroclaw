@@ -486,7 +486,7 @@ impl Tool for A2aTool {
     }
 
     fn description(&self) -> &str {
-        ""
+        "Interact with remote A2A agents. Call exactly once per request."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -496,7 +496,7 @@ impl Tool for A2aTool {
                 "action": {
                     "type": "string",
                     "enum": ["discover", "send", "stream", "status", "result"],
-                    "description": "A2A operation to perform. Follow the active skill instructions when choosing an action. 'send' dispatches a one-shot task message (use for device control: TV, lights, appliances). 'stream' opens a streaming text response."
+                    "description": "A2A operation to perform. 'send' dispatches a one-shot task message. 'stream' opens a streaming text response. 'discover' fetches the remote agent card. 'status'/'result' poll a task by ID."
                 },
                 "url": {
                     "type": "string",
@@ -516,7 +516,7 @@ impl Tool for A2aTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "Message to send to the remote agent (required for send/stream actions). For device control, pass the user's natural language request (e.g., 'turn on the TV', 'set living room lights to 50%')."
+                    "description": "Message to send to the remote agent (required for send/stream actions)."
                 }
             },
             "required": ["action"]

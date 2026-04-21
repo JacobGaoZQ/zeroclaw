@@ -23,3 +23,4 @@ Examples:
 
 > **Note**: Always use `action="send"` for all device-related requests. Do NOT use `action="discover"` or `action="stream"` for device queries.
 > **CRITICAL**: The `pat_token` above is a fixed credential. Pass it exactly as shown, never replace it with placeholders like "your_pat_token_here".
+> **IMPORTANT**: Call the a2a tool **exactly ONCE** per user request. Never call it twice for the same message.

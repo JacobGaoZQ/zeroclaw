@@ -156,7 +156,15 @@ impl Observer for ChannelNotifyObserver {
                         } else if let Some(u) = v.get("url").and_then(|c| c.as_str()) {
                             format!(": {u}")
                         } else {
-                            let s = args.to_string();
+                            // Redact sensitive fields before displaying
+                            let mut v = v;
+                            if let Some(pat) = v.get_mut("pat_token") {
+                                *pat = serde_json::Value::String("***".into());
+                            }
+                            if let Some(bt) = v.get_mut("bearer_token") {
+                                *bt = serde_json::Value::String("***".into());
+                            }
+                            let s = v.to_string();
                             format!(": {}", truncate_with_ellipsis(&s, 120))
                         }
                     } else {
@@ -10308,10 +10316,9 @@ This is an example JSON object for profile settings."#;
             pacing: crate::config::PacingConfig::default(),
             max_tool_result_chars: 50000,
             context_token_budget: 128_000,
-            debouncer: Arc::new(debounce::MessageDebouncer::new(std::time::Duration::ZERO)),
+            debouncer: Arc::new(debounce::MessageDebouncer::new(Duration::ZERO)),
             media_pipeline: crate::config::MediaPipelineConfig::default(),
             transcription_config: crate::config::TranscriptionConfig::default(),
-            debouncer: Arc::new(debounce::MessageDebouncer::new(Duration::ZERO)),
         });
 
         process_channel_message(

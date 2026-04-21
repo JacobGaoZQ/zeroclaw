@@ -4661,7 +4661,7 @@ pub async fn process_message(
     }
 
     if config.a2a.enabled {
-        tool_descs.push(("a2a", ""));
+        tool_descs.push(("a2a", "A2A (Agent-to-Agent) protocol tool for interacting with remote agents."));
     }
 
     // Filter out tools excluded for non-CLI channels (gateway counts as non-CLI).
