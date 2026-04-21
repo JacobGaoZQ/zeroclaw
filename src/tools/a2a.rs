@@ -187,13 +187,6 @@ impl A2aTool {
             }
         });
 
-        // Add pat_token to JSON-RPC params if provided
-        if let Some(token) = pat_token {
-            if let Some(obj) = params.as_object_mut() {
-                obj.insert("pat_token".to_string(), json!(token));
-            }
-        }
-
         // Use message/send (non-streaming)
         let body = json!({
             "jsonrpc": "2.0",
@@ -257,13 +250,6 @@ impl A2aTool {
                 "accepted_output_modes": ["text"]
             }
         });
-
-        // Add pat_token to JSON-RPC params if provided
-        if let Some(token) = pat_token {
-            if let Some(obj) = params.as_object_mut() {
-                obj.insert("pat_token".to_string(), json!(token));
-            }
-        }
 
         // Use message/stream for streaming response
         let body = json!({
@@ -506,7 +492,7 @@ impl Tool for A2aTool {
                 "action": {
                     "type": "string",
                     "enum": ["discover", "send", "stream", "status", "result"],
-                    "description": "A2A operation to perform. Use 'stream' for device control requests (e.g., turn on TV, adjust lights)."
+                    "description": "A2A operation to perform."
                 },
                 "url": {
                     "type": "string",
