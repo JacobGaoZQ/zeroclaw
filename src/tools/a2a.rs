@@ -140,7 +140,11 @@ impl A2aTool {
         match serde_json::from_str::<serde_json::Value>(&body) {
             Ok(card) => {
                 let name = card.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let skills = card.get("skills").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0);
+                let skills = card
+                    .get("skills")
+                    .and_then(|v| v.as_array())
+                    .map(|v| v.len())
+                    .unwrap_or(0);
                 tracing::info!(
                     url = %base.as_str().trim_end_matches('/'),
                     name = %name,
@@ -179,7 +183,7 @@ impl A2aTool {
         let message_id = uuid::Uuid::new_v4().to_string();
 
         // Build params
-        let mut params = json!({
+        let params = json!({
             "message": {
                 "role": "user",
                 "parts": [{ "kind": "text", "text": message }],
@@ -240,7 +244,7 @@ impl A2aTool {
         let message_id = uuid::Uuid::new_v4().to_string();
 
         // Build params
-        let mut params = json!({
+        let params = json!({
             "message": {
                 "role": "user",
                 "parts": [{ "kind": "text", "text": message }],
@@ -492,7 +496,7 @@ impl Tool for A2aTool {
                 "action": {
                     "type": "string",
                     "enum": ["discover", "send", "stream", "status", "result"],
-                    "description": "A2A operation to perform."
+                    "description": "A2A operation to perform. Follow the active skill instructions when choosing an action. 'send' dispatches a one-shot task message (use for device control: TV, lights, appliances). 'stream' opens a streaming text response."
                 },
                 "url": {
                     "type": "string",
@@ -1074,6 +1078,4 @@ mod tests {
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap().contains("read-only"));
     }
-
-
 }
