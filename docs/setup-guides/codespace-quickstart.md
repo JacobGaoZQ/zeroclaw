@@ -37,6 +37,7 @@ cargo build --release --locked
 
 复制.env.example，命名.env，注释其他所有配置，仅配置以下几项：
 
+A2A_ENABLED=true
 ZEROCLAW_PROVIDER=qwen
 ZEROCLAW_MODEL=qwen-plus
 DASHSCOPE_API_KEY=xxxxxx
@@ -45,30 +46,26 @@ A2A_CLIENT_TOKEN=your-a2a-api-key-here
 
 配置将写入 `~/.zeroclaw/config.toml`。
 
-## 五、修改配置以适配 CodeSpaces
+## 五、安装模拟测试的SKILL
 
-为了让 CodeSpaces 的端口转发和浏览器预览正常工作，建议将 Gateway 绑定到 `0.0.0.0`。编辑配置文件：
-
-```bash
-cat ~/.zeroclaw/config.toml
-```
-
-添加或修改 `[gateway]` 段落：
-
-```toml
-[gateway]
-host = "0.0.0.0"
-port = 42617
-allow_public_bind = true
-require_pairing = true   # 默认开启，首次访问需配对码
-```
-
-> `allow_public_bind = true` 用于消除公共绑定警告；CodeSpaces 的端口转发已提供安全隔离。
+./target/release/zeroclaw skills list — 查看当前已安装的 skills
+mkdir -p /home/codespace/.zeroclaw/workspace/skills && cp -r /workspaces/zeroclaw/skills/device-control
+/home/codespace/.zeroclaw/workspace/skills/ — 创建 skills 目录并将 device-control 复制过去
+./target/release/zeroclaw skills list — 验证 skill 加载成功（显示 device-control v0.3.0）
 
 ## 六、启动 Gateway
 
+设置环境变量
+
 ```bash
-cargo run --release -- gateway
+echo 'alias zeroclaw="/workspaces/zeroclaw/target/release/zeroclaw"' >> ~/.bashrc 
+source ~/.bashrc 
+```
+
+启动命令
+
+```bash
+zeroclaw gateway 或 cargo run --release -- gateway
 ```
 
 启动成功后，终端将输出类似：
