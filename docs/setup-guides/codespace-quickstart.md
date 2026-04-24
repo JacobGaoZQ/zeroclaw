@@ -35,15 +35,13 @@ cargo build --release --locked
 
 ## 四、初始化配置（Onboard）
 
-ZeroClaw 需要至少配置一个 LLM Provider 和 API Key。运行快速初始化：
+复制.env.example，命名.env，注释其他所有配置，仅配置以下几项：
 
-```bash
-# 示例：使用 OpenRouter（也可换为 anthropic, openai 等）
-cargo run --release -- onboard --quick \
-  --api-key "sk-or-v1-..." \
-  --provider openrouter \
-  --memory sqlite
-```
+ZEROCLAW_PROVIDER=qwen
+ZEROCLAW_MODEL=qwen-plus
+DASHSCOPE_API_KEY=xxxxxx
+A2A_STRANDS_AGENT_URL=http://120.26.206.98:8000/a2a
+A2A_CLIENT_TOKEN=your-a2a-api-key-here
 
 配置将写入 `~/.zeroclaw/config.toml`。
 
@@ -88,14 +86,13 @@ cargo run --release -- gateway
 ## 七、CodeSpaces 端口转发
 
 1. 切换到 VS Code 底部 **Ports** 面板
-2. 点击 **Forward a Port**，输入 `42617`
-3. CodeSpaces 会自动分配一个公网可访问的 URL，例如：
+2. CodeSpaces 会自动分配一个公网可访问的 URL，例如：
    ```
    https://your-codespace-name-42617.github.dev
    ```
-4. 右键该端口 → **Open in Browser**
+3. 右键该端口 → **Open in Browser**
 
-> 若未自动分配，可点击端口行上的 **globe 图标** 打开。
+> 或者可点击端口行上的 **globe 图标** 打开。
 
 ## 八、在 Dashboard 中与 Agent 对话
 
